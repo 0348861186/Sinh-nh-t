@@ -1,8 +1,7 @@
 google-genai
-opencv-python
+opencv-python-headless
 ezdxf
 numpy
 Pillow
 pydantic
 streamlit
-pypotrace
