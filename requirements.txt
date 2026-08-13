@@ -5,3 +5,5 @@ numpy
 Pillow
 pydantic
 streamlit
+shapely
+scikit-image
