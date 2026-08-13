@@ -6,3 +6,5 @@ shapely
 matplotlib
 Pillow
 google-genai
+pydantic
+pypotrace
