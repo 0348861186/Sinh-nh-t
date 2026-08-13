@@ -1,10 +1,8 @@
-streamlit
-numpy
-opencv-python-headless
-ezdxf
-shapely
-matplotlib
-Pillow
 google-genai
+opencv-python
+ezdxf
+numpy
+Pillow
 pydantic
+streamlit
 pypotrace
