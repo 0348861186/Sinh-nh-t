@@ -25,7 +25,7 @@ class DrawingDimensions(BaseModel):
 
 
 def extract_dimensions_with_gemini(image_bytes, api_key):
-    """Đọc kích thước từ ghi chú trên ảnh bằng Gemini AI."""
+    """Đọc kích thước bản vẽ tự động bằng Gemini AI."""
     try:
         client = genai.Client(api_key=api_key)
         img = Image.open(io.BytesIO(image_bytes))
@@ -58,101 +58,117 @@ def extract_dimensions_with_gemini(image_bytes, api_key):
 
 
 # ==============================================================================
-# 2. XỬ LÝ TRÍCH XUẤT VECTOR NGUYÊN BẢN & ĐIỀU CHỈNH HOA VĂN + KHUNG SEPARATE
+# 2. THUẬT TOÁN ĐO NẾT THỰC TẾ & BÙ TRỪ KÍCH THƯỚC ĐÚNG ABSOLUTE MM
 # ==============================================================================
-def process_pattern_and_frame(
+def measure_pattern_thickness_px(binary_img):
+    """Đo bán kính/độ rộng nét trung bình của hoa văn trên phôi binary."""
+    dist = cv2.distanceTransform(binary_img, cv2.DIST_L2, 5)
+    vals = dist[dist > 2]
+    if len(vals) == 0:
+        return 20.0
+    # Bán kính nét trung bình (pixel)
+    median_radius = np.median(vals)
+    return median_radius * 2.0  # Đường kính nét (pixel)
+
+
+def process_vector_exact_mm(
     image_bytes,
     target_w_mm=810.0,
     target_h_mm=2280.0,
     pattern_stroke_mm=70.0,
     frame_stroke_mm=70.0,
 ):
-    """Trích xuất chính xác 100% vector dáng gốc, cho phép tùy chỉnh riêng độ rộng hoa văn và khung bao."""
+    """Tách biệt xử lý Khung và Hoa văn, bù trừ chính xác đúng số mm nhập vào."""
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # 1. Binarize (Tách phần phôi gỗ màu nâu ra khỏi nền)
+    # 1. Binarize
     _, thresh = cv2.threshold(
         gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
     )
 
-    # 2. Loại bỏ hoàn toàn chữ OCR & mũi tên xung quanh bằng Bounding Box
-    contours_external, _ = cv2.findContours(
+    # 2. Cắt bỏ lề chứa chữ & ghi chú bên ngoài
+    contours_ext, _ = cv2.findContours(
         thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
-    if not contours_external:
-        return [], (thresh.shape[1], thresh.shape[0])
+    if not contours_ext:
+        return []
 
-    main_contour = max(contours_external, key=cv2.contourArea)
-    x, y, w, h = cv2.boundingRect(main_contour)
+    main_cnt = max(contours_ext, key=cv2.contourArea)
+    x, y, w, h = cv2.boundingRect(main_cnt)
 
-    pattern_crop = thresh[y : y + h, x : x + w]
+    crop_thresh = thresh[y : y + h, x : x + w]
 
+    # Tỉ lệ đổi pixel sang mm
     scale_x = target_w_mm / w
     scale_y = target_h_mm / h
     avg_scale = (scale_x + scale_y) / 2.0
 
-    # 3. Xử lý tùy chỉnh độ rộng nét hoa văn nếu khác mặc định 70mm
-    base_stroke_mm = 70.0
-    diff_pattern_mm = pattern_stroke_mm - base_stroke_mm
+    # 3. XỬ LÝ HOA VĂN BÊN TRONG (BÙ TRỪ ĐÚNG mm PATTERN)
+    # Đo nét hoa văn hiện tại trên ảnh gốc (tính ra mm)
+    current_stroke_px = measure_pattern_thickness_px(crop_thresh)
+    current_stroke_mm = current_stroke_px * avg_scale
 
+    # Tính lượng chênh lệch mm cần bù
+    diff_pattern_mm = pattern_stroke_mm - current_stroke_mm
+
+    pattern_img = crop_thresh.copy()
     if abs(diff_pattern_mm) > 1.0:
-        kernel_size = int(abs(diff_pattern_mm) / avg_scale)
-        if kernel_size > 0:
-            if kernel_size % 2 == 0:
-                kernel_size += 1
+        # Số pixel cần dilate/erode
+        pad_px = int(round((abs(diff_pattern_mm) / 2.0) / avg_scale))
+        if pad_px > 0:
+            k_size = pad_px * 2 + 1
             kernel = cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)
+                cv2.MORPH_ELLIPSE, (k_size, k_size)
             )
-
             if diff_pattern_mm > 0:
-                pattern_crop = cv2.dilate(pattern_crop, kernel, iterations=1)
+                pattern_img = cv2.dilate(pattern_img, kernel, iterations=1)
             else:
-                pattern_crop = cv2.erode(pattern_crop, kernel, iterations=1)
+                pattern_img = cv2.erode(pattern_img, kernel, iterations=1)
 
-    # 4. Trích xuất toàn bộ cấu trúc đường viền (Viền khung ngoài + Các lỗ trống hoa văn)
+    # Trích xuất đường viền hoa văn
     contours, hierarchy = cv2.findContours(
-        pattern_crop, cv2.RETR_TREE, cv2.CHAIN_APPROX_TC89_KCOS
+        pattern_img, cv2.RETR_TREE, cv2.CHAIN_APPROX_TC89_KCOS
     )
 
-    pattern_polygons = []
+    all_polygons = []
 
-    # A. Dựng khung ngoài theo độ rộng frame_stroke_mm tùy chỉnh
-    # Đường viền biên ngoài cùng phôi
-    outer_frame = [
+    # 4. TẠO KHUNG BAO NGOÀI CHUẨN XÁC KÍCH THƯỚC FRAME_STROKE_MM
+    # A. Đường viền ngoài cùng của tấm phôi (0,0) -> (W, H)
+    outer_box = [
         (0.0, 0.0),
         (target_w_mm, 0.0),
         (target_w_mm, target_h_mm),
         (0.0, target_h_mm),
         (0.0, 0.0),
     ]
+    all_polygons.append(outer_box)
 
-    # Đường viền lọt lòng trong của khung (bằng chiều rộng tổng trừ đi độ rộng khung 2 bên)
-    inner_x1 = frame_stroke_mm
-    inner_y1 = frame_stroke_mm
-    inner_x2 = target_w_mm - frame_stroke_mm
-    inner_y2 = target_h_mm - frame_stroke_mm
+    # B. Đường viền lòng trong của khung bao (Lùi vào đúng frame_stroke_mm mỗi bên)
+    fx1 = frame_stroke_mm
+    fy1 = frame_stroke_mm
+    fx2 = target_w_mm - frame_stroke_mm
+    fy2 = target_h_mm - frame_stroke_mm
 
-    if inner_x2 > inner_x1 and inner_y2 > inner_y1:
-        inner_frame = [
-            (inner_x1, inner_y1),
-            (inner_x2, inner_y1),
-            (inner_x2, inner_y2),
-            (inner_x1, inner_y2),
-            (inner_x1, inner_y1),
+    if fx2 > fx1 and fy2 > fy1:
+        inner_box = [
+            (fx1, fy1),
+            (fx2, fy1),
+            (fx2, fy2),
+            (fx1, fy2),
+            (fx1, fy1),
         ]
-        pattern_polygons.append(outer_frame)
-        pattern_polygons.append(inner_frame)
+        all_polygons.append(inner_box)
 
-    # B. Dựng toàn bộ chi tiết hoa văn chuẩn dáng gốc
+    # 5. LỌC VÀ LẤY CHỈ CÁC HOẠT TIẾT HOA VĂN NẰM TRONG KHUNG
     if hierarchy is not None:
         for i, cnt in enumerate(contours):
-            if cv2.contourArea(cnt) < 40:
+            if cv2.contourArea(cnt) < 50:
                 continue
 
-            # Bỏ qua contour ngoài cùng của crop để dùng khung dựng chuẩn ở trên
-            if hierarchy[0][i][3] == -1 and i == 0:
+            # Bỏ qua contour ngoài cùng của ảnh crop (vì đã tạo khung chuẩn ở trên)
+            if hierarchy[0][i][3] == -1:
                 continue
 
             epsilon = 0.001 * cv2.arcLength(cnt, True)
@@ -161,31 +177,33 @@ def process_pattern_and_frame(
             pts = []
             for p in approx:
                 px, py = p[0][0], p[0][1]
-                # Đảo trục Y cho AutoCAD
-                pts.append((px * scale_x, (h - py) * scale_y))
+                # Chuyển đổi tọa độ mm và đảo trục Y cho CAD
+                mx = px * scale_x
+                my = (h - py) * scale_y
+                pts.append((mx, my))
 
             if len(pts) > 2:
                 pts.append(pts[0])
-                pattern_polygons.append(pts)
+                all_polygons.append(pts)
 
-    return pattern_polygons, (w, h)
+    return all_polygons, current_stroke_mm
 
 
 # ==============================================================================
 # 3. XUẤT FILE DXF CẮT CNC
 # ==============================================================================
-def create_dxf_file(pattern_polygons):
+def create_dxf_file(polygons):
     """Xuất file DXF chứa đầy đủ đường cắt chuẩn."""
     doc = ezdxf.new("R2010")
     msp = doc.modelspace()
 
     doc.layers.add(name="CAT_CNC_HOA_VAN", color=1)
 
-    for poly in pattern_polygons:
+    for poly in polygons:
         msp.add_lwpolyline(poly, dxfattribs={"layer": "CAT_CNC_HOA_VAN"})
 
     tmp_dir = tempfile.mkdtemp()
-    filepath = os.path.join(tmp_dir, "Hoa_Van_Chuan_CNC.dxf")
+    filepath = os.path.join(tmp_dir, "Hoa_Van_Chuan_DXF.dxf")
     doc.saveas(filepath)
 
     with open(filepath, "rb") as f:
@@ -200,7 +218,7 @@ def create_dxf_file(pattern_polygons):
 st.set_page_config(
     page_title="Auto CAD Vectorizer & Gemini OCR", layout="wide"
 )
-st.title("🌺 Hybrid AI Engine: Trích Xuất Vector Chuẩn Dáng Gốc 100%")
+st.title("🌺 Hybrid AI Engine: Ép Chuẩn Kích Thước DXF (Hoa Văn & Khung)")
 
 st.sidebar.header("⚙️ Cấu hình Hệ thống")
 api_key = st.sidebar.text_input("Nhập Gemini API Key:", type="password")
@@ -223,7 +241,6 @@ if uploaded_file:
         st.subheader("🖼️ Ảnh Gốc Upload")
         st.image(img_bytes, use_container_width=True)
 
-        # NÚT 1: Gemini AI đọc kích thước
         if st.button("🤖 NÚT AI: Đọc Kích Thước Bản Vẽ (Gemini OCR)"):
             if not api_key:
                 st.error("Vui lòng nhập Gemini API Key ở Sidebar!")
@@ -237,41 +254,37 @@ if uploaded_file:
                     )
 
     with col2:
-        st.subheader("📐 Thông Số Kích Thước & Tùy Chỉnh Nét")
+        st.subheader("📐 Kích Thước Phôi Tổng Thể (mm)")
 
         st.session_state.width_mm = st.number_input(
-            "Chiều rộng phôi (mm):", value=st.session_state.width_mm
+            "Chiều rộng phôi tổng thể (mm):", value=st.session_state.width_mm
         )
         st.session_state.height_mm = st.number_input(
-            "Chiều cao phôi (mm):", value=st.session_state.height_mm
+            "Chiều cao phôi tổng thể (mm):", value=st.session_state.height_mm
         )
 
         st.markdown("---")
-        st.subheader("🎛️ Tùy Chỉnh Tách Biệt Nét")
+        st.subheader("🎛️ Tùy Chỉnh Độ Rộng Nét Thực Tế (DXF)")
 
-        # 2 Ô NHẬP TÙY CHỈNH THEO YÊU CẦU
         pattern_stroke = st.number_input(
-            "1. Độ rộng nét HOA VĂN (mm):",
+            "1. Độ rộng nét HOA VĂN trong DXF (mm):",
             value=70.0,
-            step=5.0,
-            help="Chỉnh độ dày mỏng riêng cho các họa tiết hoa văn bên trong",
+            step=1.0,
+            help="Đúng số mm khi dùng thước đo trong AutoCAD cho hoa văn",
         )
 
         frame_stroke = st.number_input(
-            "2. Độ rộng KHUNG BAO ngoài (mm):",
+            "2. Độ rộng KHUNG BAO NGOÀI trong DXF (mm):",
             value=70.0,
-            step=5.0,
-            help="Chỉnh độ rộng bản khung gỗ bao quanh ngoài",
+            step=1.0,
+            help="Đúng số mm khi dùng thước đo trong AutoCAD cho khung viền",
         )
 
         st.markdown("---")
 
-        # NÚT 2: Xuất DXF Vector
         if st.button("⚙️ NÚT CAD: Trích Xuất Vector & Tải File DXF"):
-            with st.spinner(
-                f"Đang xử lý vector (Hoa văn: {pattern_stroke}mm | Khung: {frame_stroke}mm)..."
-            ):
-                pattern_polygons, (w_px, h_px) = process_pattern_and_frame(
+            with st.spinner("Đang tính toán bù trừ kích thước chuẩn xác..."):
+                polygons, measured_stroke_mm = process_vector_exact_mm(
                     img_bytes,
                     st.session_state.width_mm,
                     st.session_state.height_mm,
@@ -279,15 +292,18 @@ if uploaded_file:
                     frame_stroke_mm=frame_stroke,
                 )
 
-                dxf_bytes = create_dxf_file(pattern_polygons)
+                dxf_bytes = create_dxf_file(polygons)
 
+            st.info(
+                f"📏 Độ rộng nét hoa văn gốc trên ảnh đo được: **{measured_stroke_mm:.1f}mm**"
+            )
             st.success(
-                f"✅ Đã trích xuất thành công **{len(pattern_polygons)}** đường cắt vector trùng khớp ảnh gốc!"
+                f"✅ Đã ép chuẩn file DXF: **Khung = {frame_stroke}mm** | **Hoa văn = {pattern_stroke}mm**!"
             )
 
             st.download_button(
                 label=f"💾 TẢI FILE DXF (Hoa văn {int(pattern_stroke)}mm - Khung {int(frame_stroke)}mm)",
                 data=dxf_bytes,
-                file_name=f"Hoa_Van_CNC_{int(pattern_stroke)}mm_Khung_{int(frame_stroke)}mm.dxf",
+                file_name=f"Hoa_Van_Chuan_{int(pattern_stroke)}mm_Khung_{int(frame_stroke)}mm.dxf",
                 mime="application/dxf",
             )
