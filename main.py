@@ -1238,7 +1238,7 @@ Trả lời chuyên nghiệp, ngắn gọn.
 """
 
     response = client.models.generate_content(
-        gemini-1.5-flash,
+        model="gemini-2.5-flash",
         contents=prompt
     )
 
