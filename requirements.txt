@@ -1,8 +1,7 @@
-google-genai
+streamlit
+ezyDxf
 opencv-python-headless
-ezdxf
 numpy
 Pillow
-pydantic
-streamlit
-shapely
+google-genai
+matplotlib
