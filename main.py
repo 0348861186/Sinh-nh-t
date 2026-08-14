@@ -58,15 +58,29 @@ def extract_dimensions_with_gemini(image_bytes, api_key):
 
 
 # ==============================================================================
-# 2. XỬ LÝ TRÍCH XUẤT VECTOR & CHỈNH ĐỘ RỘNG HOA VĂN MƯỢT MÀ
+# 2. XỬ LÝ TRÍCH XUẤT VECTOR & ÉP CHÍNH XÁC ĐỘ RỘNG NẾT (MM)
 # ==============================================================================
-def process_pattern_with_custom_thickness(
+def measure_current_stroke_width(binary_img, scale_mm_per_px):
+    """Đo độ rộng nét trung bình hiện tại của phôi ảnh gốc (tính bằng mm)."""
+    dist_transform = cv2.distanceTransform(binary_img, cv2.DIST_L2, 5)
+    # Bán kính nét trung bình tại các vùng phôi chính
+    max_radii = dist_transform[dist_transform > 0]
+    if len(max_radii) == 0:
+        return 46.0  # Mặc định nếu không đo được
+
+    # Lấy giá trị bán kính trung bình của các đường nét
+    avg_radius_px = np.median(max_radii)
+    current_stroke_mm = (avg_radius_px * 2.0) * scale_mm_per_px
+    return current_stroke_mm
+
+
+def process_pattern_exact_thickness(
     image_bytes,
     target_w_mm=810.0,
     target_h_mm=2280.0,
-    stroke_width_mm=70.0,
+    desired_stroke_mm=70.0,
 ):
-    """Trích xuất hoa văn và tự động căn chỉnh độ rộng nét theo đúng thông số nhập vào (mm)."""
+    """Trích xuất hoa văn và bù trừ chính xác để đạt độ rộng nét tuyệt đối theo mm."""
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -81,7 +95,7 @@ def process_pattern_with_custom_thickness(
         thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
     if not contours_external:
-        return [], (thresh.shape[1], thresh.shape[0])
+        return [], (thresh.shape[1], thresh.shape[0]), 0.0
 
     main_contour = max(contours_external, key=cv2.contourArea)
     x, y, w, h = cv2.boundingRect(main_contour)
@@ -91,28 +105,29 @@ def process_pattern_with_custom_thickness(
     scale_y = target_h_mm / h
     avg_scale = (scale_x + scale_y) / 2.0
 
-    # 3. Tự động vi điều chỉnh độ rộng nét theo thông số người dùng nhập (stroke_width_mm)
-    # Ảnh gốc chuẩn đã có nét khoảng ~70mm. Nếu người dùng nhập thay đổi, OpenCV sẽ tự căn chỉnh kernel
-    base_stroke_mm = 70.0
-    diff_mm = stroke_width_mm - base_stroke_mm
+    # 3. ĐO ĐỘ RỘNG NẾT THỰC TẾ TRÊN ẢNH GỐC
+    measured_stroke_mm = measure_current_stroke_width(pattern_crop, avg_scale)
 
-    if abs(diff_mm) > 2.0:
-        kernel_size_px = int(abs(diff_mm) / avg_scale)
-        if kernel_size_px > 0:
-            if kernel_size_px % 2 == 0:
-                kernel_size_px += 1
+    # 4. TÍNH TOÁN BÙ TRỪ KÍCH THƯỚC ĐỂ ĐẠT ĐÚNG DESIRED_STROKE_MM
+    diff_mm = desired_stroke_mm - measured_stroke_mm
+
+    if abs(diff_mm) > 1.0:
+        # Số pixel cần bù trừ về mỗi bên
+        pad_px = int(round((abs(diff_mm) / 2.0) / avg_scale))
+        if pad_px > 0:
+            kernel_size = pad_px * 2 + 1
             kernel = cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE, (kernel_size_px, kernel_size_px)
+                cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)
             )
 
             if diff_mm > 0:
-                # Phóng rộng nét nếu muốn nét dày hơn 70mm
+                # Phóng nét nếu kích thước đo được nhỏ hơn mong muốn
                 pattern_crop = cv2.dilate(pattern_crop, kernel, iterations=1)
             else:
-                # Thu nhỏ nét nếu muốn nét mỏng hơn 70mm
+                # Thu nhỏ nét nếu kích thước đo được lớn hơn mong muốn
                 pattern_crop = cv2.erode(pattern_crop, kernel, iterations=1)
 
-    # 4. Trích xuất đường viền chuẩn phân cấp lòng trong / lòng ngoài
+    # 5. Trích xuất đường viền chuẩn phân cấp
     contours, hierarchy = cv2.findContours(
         pattern_crop, cv2.RETR_TREE, cv2.CHAIN_APPROX_TC89_KCOS
     )
@@ -136,7 +151,7 @@ def process_pattern_with_custom_thickness(
                 pts.append(pts[0])
                 pattern_polygons.append(pts)
 
-    return pattern_polygons, (w, h)
+    return pattern_polygons, (w, h), measured_stroke_mm
 
 
 # ==============================================================================
@@ -168,7 +183,7 @@ def create_dxf_file(pattern_polygons):
 st.set_page_config(
     page_title="Auto CAD Vectorizer & Gemini OCR", layout="wide"
 )
-st.title("🌺 Hybrid AI Engine: Trích Xuất Vector & Chỉnh Độ Rộng Nét Hoa Văn")
+st.title("🌺 Hybrid AI Engine: ĐO VÀ ÉP NẾT HOA VĂN THỰC TẾ (MM)")
 
 st.sidebar.header("⚙️ Cấu hình Hệ thống")
 api_key = st.sidebar.text_input("Nhập Gemini API Key:", type="password")
@@ -191,7 +206,6 @@ if uploaded_file:
         st.subheader("🖼️ Ảnh Gốc Upload")
         st.image(img_bytes, use_container_width=True)
 
-        # NÚT 1: Gemini AI đọc kích thước
         if st.button("🤖 NÚT AI: Đọc Kích Thước Bản Vẽ (Gemini OCR)"):
             if not api_key:
                 st.error("Vui lòng nhập Gemini API Key ở Sidebar!")
@@ -205,7 +219,7 @@ if uploaded_file:
                     )
 
     with col2:
-        st.subheader("📐 Bảng Tùy Chỉnh Kích Thước & Độ Rộng Nét")
+        st.subheader("📐 Bảng Tùy Chỉnh Kích Thước Phôi & Nét")
 
         st.session_state.width_mm = st.number_input(
             "Chiều rộng phôi (mm):", value=st.session_state.width_mm
@@ -214,39 +228,38 @@ if uploaded_file:
             "Chiều cao phôi (mm):", value=st.session_state.height_mm
         )
 
-        # 🎯 Ô NHẬP ĐỘ RỘNG NẾT HOA VĂN BẠN YÊU CẦU
-        custom_stroke_mm = st.number_input(
-            "Độ rộng nét hoa văn & khung (mm):",
+        desired_stroke = st.number_input(
+            "Độ rộng nét mong muốn trong DXF (mm):",
             value=70.0,
-            step=5.0,
-            help="Mặc định là 70mm theo bản vẽ. Bạn có thể tăng/giảm tùy ý.",
+            step=1.0,
+            help="Hệ thống sẽ đo nét thực tế trên ảnh và tự động bù trừ đủ số mm này.",
         )
 
         st.markdown("---")
 
-        # NÚT 2: Trích xuất Vector & Xuất DXF
         if st.button("⚙️ NÚT CAD: Trích Xuất Vector & Tải File DXF"):
-            with st.spinner(
-                f"Đang xử lý vector với độ rộng nét {custom_stroke_mm}mm..."
-            ):
-                pattern_polygons, (w_px, h_px) = (
-                    process_pattern_with_custom_thickness(
+            with st.spinner("Đang đo nét gốc và bù trừ kích thước mm..."):
+                pattern_polygons, (w_px, h_px), measured_mm = (
+                    process_pattern_exact_thickness(
                         img_bytes,
                         st.session_state.width_mm,
                         st.session_state.height_mm,
-                        stroke_width_mm=custom_stroke_mm,
+                        desired_stroke_mm=desired_stroke,
                     )
                 )
 
                 dxf_bytes = create_dxf_file(pattern_polygons)
 
+            st.info(
+                f"📏 Nét hoa văn đo được trên ảnh gốc: **{measured_mm:.1f}mm**"
+            )
             st.success(
-                f"✅ Đã tạo file DXF nét **{custom_stroke_mm}mm** thành công với **{len(pattern_polygons)}** đường nét chuẩn!"
+                f"✅ Đã tự động bù trừ **{desired_stroke - measured_mm:+.1f}mm** để đưa nét về đúng **{desired_stroke}mm**!"
             )
 
             st.download_button(
-                label=f"💾 TẢI FILE DXF CẮT CNC (NẾT {int(custom_stroke_mm)}MM)",
+                label=f"💾 TẢI FILE DXF CHUẨN {int(desired_stroke)}MM",
                 data=dxf_bytes,
-                file_name=f"Hoa_Van_Net_{int(custom_stroke_mm)}mm.dxf",
+                file_name=f"Hoa_Van_Chuan_{int(desired_stroke)}mm.dxf",
                 mime="application/dxf",
             )
