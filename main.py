@@ -1,256 +1,287 @@
-import io
-import json
-import os
-import tempfile
+import streamlit as st
 import cv2
+import numpy as np
 import ezdxf
+from PIL import Image
+import io
+import os
 from google import genai
 from google.genai import types
-import numpy as np
-from PIL import Image
-from pydantic import BaseModel, Field
-import streamlit as st
 
+# ----------------------------------------------------
+# CONFIG & PAGE SETUP
+# ----------------------------------------------------
+st.set_page_config(page_title="AI CAD/CAM Dashboard", layout="wide")
+st.title("🤖 AI CAD/CAM Dashboard: Image/DXF to DXF & G-Code")
 
-# ==============================================================================
-# 1. GEMINI OCR SCHEMA & PARSER
-# ==============================================================================
-class DrawingDimensions(BaseModel):
-    width_mm: float = Field(
-        description="Chiều rộng ghi chú trên ảnh (mm) - Ví dụ 2280"
-    )
-    height_mm: float = Field(
-        description="Chiều cao ghi chú trên ảnh (mm) - Ví dụ 810"
-    )
+# Khởi tạo Session State để lưu trữ dữ liệu giữa các lần làm mới giao diện
+if 'processed_image' not in st.session_state:
+    st.session_state.processed_image = None
+if 'dxf_content' not in st.session_state:
+    st.session_state.dxf_content = None
+if 'gcode_content' not in st.session_state:
+    st.session_state.gcode_content = None
+if 'ai_thoughts' not in st.session_state:
+    st.session_state.ai_thoughts = ""
+if 'detected_contours' not in st.session_state:
+    st.session_state.detected_contours = []
+if 'scale_factor' not in st.session_state:
+    st.session_state.scale_factor = 1.0
 
-
-def extract_dimensions_with_gemini(image_bytes, api_key):
-    """Đọc kích thước tự động bằng Gemini 1.5 Flash."""
-    try:
-        client = genai.Client(api_key=api_key)
-        img = Image.open(io.BytesIO(image_bytes))
-
-        prompt = """
-        Đọc 2 kích thước ghi chú trên bản vẽ:
-        - Chiều rộng nằm ngang (Ví dụ: 2280mm)
-        - Chiều cao thẳng đứng (Ví dụ: 810mm)
-        Trả về đúng định dạng JSON Schema.
-        """
-
-        response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=[img, prompt],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=DrawingDimensions,
-            ),
-        )
-
-        data = json.loads(response.text.strip())
-        w = data.get("width_mm", 2280.0)
-        h = data.get("height_mm", 810.0)
-        return w, h
-    except Exception as e:
-        st.warning(f"⚠️ OCR AI: {e}. Dùng kích thước mặc định: 2280mm x 810mm.")
-        return 2280.0, 810.0
-
-
-# ==============================================================================
-# 2. XỬ LÝ TRÍCH XUẤT VECTOR CHUẨN DÁNG + KHUNG THEO YÊU CẦU
-# ==============================================================================
-def process_exact_pattern_with_custom_frame(
-    image_bytes, target_w_mm=2280.0, target_h_mm=810.0, frame_stroke_mm=70.0
-):
-    """Trích xuất trọn vẹn hoa văn gốc 100% kết hợp DỰNG KHUNG BAO CHUẨN KÍCH THƯỚC (mm)."""
-    nparr = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # 1. Binarize tách phôi màu nâu
-    _, thresh = cv2.threshold(
-        gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
-    )
-
-    # 2. Cắt bỏ lề ghi chú chữ xung quanh
-    contours_ext, _ = cv2.findContours(
-        thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    )
-    if not contours_ext:
-        return []
-
-    main_cnt = max(contours_ext, key=cv2.contourArea)
-    x, y, w_px, h_px = cv2.boundingRect(main_cnt)
-
-    pattern_crop = thresh[y : y + h_px, x : x + w_px]
-
-    scale_x = target_w_mm / float(w_px)
-    scale_y = target_h_mm / float(h_px)
-
-    all_polygons = []
-
-    # 3. DỰNG KHUNG BAO NGOÀI BẰNG HÌNH HỌC TỰ ĐỘNG (ĐẢM BẢO VIỀN KHUNG ĐÚNG MM)
-    # A. Đường viền biên ngoài cùng phôi (0,0) -> (target_w_mm, target_h_mm)
-    outer_box = [
-        (0.0, 0.0),
-        (target_w_mm, 0.0),
-        (target_w_mm, target_h_mm),
-        (0.0, target_h_mm),
-        (0.0, 0.0),
-    ]
-    all_polygons.append(outer_box)
-
-    # B. Đường viền lọt lòng trong của khung (Lùi vào đúng frame_stroke_mm mỗi bên)
-    fx1 = frame_stroke_mm
-    fy1 = frame_stroke_mm
-    fx2 = target_w_mm - frame_stroke_mm
-    fy2 = target_h_mm - frame_stroke_mm
-
-    if fx2 > fx1 and fy2 > fy1:
-        inner_box = [
-            (fx1, fy1),
-            (fx2, fy1),
-            (fx2, fy2),
-            (fx1, fy2),
-            (fx1, fy1),
-        ]
-        all_polygons.append(inner_box)
-
-    # 4. TRÍCH XUẤT CÁC LỖ THỦNG HOA VĂN BÊN TRONG (GIỮ 100% ĐƯỜNG CONG NGUYÊN BẢN)
-    contours, hierarchy = cv2.findContours(
-        pattern_crop, cv2.RETR_TREE, cv2.CHAIN_APPROX_TC89_KCOS
-    )
-
-    if hierarchy is not None:
-        for i, cnt in enumerate(contours):
-            # Lọc bớt vết chấm nhiễu rác
-            if cv2.contourArea(cnt) < 30:
-                continue
-
-            # Bỏ qua viền ngoài cùng của ảnh crop (vì đã dựng khung chuẩn ở bước 3)
-            if hierarchy[0][i][3] == -1:
-                continue
-
-            epsilon = 0.0008 * cv2.arcLength(cnt, True)
-            approx = cv2.approxPolyDP(cnt, epsilon, True)
-
-            pts = []
-            for p in approx:
-                px, py = p[0][0], p[0][1]
-                # Đổi sang mm thực tế & Đảo trục Y cho AutoCAD
-                mx = px * scale_x
-                my = (h_px - py) * scale_y
-                pts.append((mx, my))
-
-            if len(pts) > 2:
-                pts.append(pts[0])
-                all_polygons.append(pts)
-
-    return all_polygons
-
-
-# ==============================================================================
-# 3. XUẤT FILE DXF CẮT CNC
-# ==============================================================================
-def create_dxf_file(polygons):
-    """Xuất file DXF chuẩn layer CNC."""
-    doc = ezdxf.new("R2010")
-    msp = doc.modelspace()
-
-    doc.layers.add(name="CAT_CNC_HOA_VAN", color=1)
-
-    for poly in polygons:
-        msp.add_lwpolyline(poly, dxfattribs={"layer": "CAT_CNC_HOA_VAN"})
-
-    tmp_dir = tempfile.mkdtemp()
-    filepath = os.path.join(tmp_dir, "Hoa_Van_CNC_Chuan.dxf")
-    doc.saveas(filepath)
-
-    with open(filepath, "rb") as f:
-        dxf_bytes = f.read()
-
-    return dxf_bytes
-
-
-# ==============================================================================
-# 4. GIAO DIỆN STREAMLIT WEB
-# ==============================================================================
-st.set_page_config(
-    page_title="Auto CAD Vectorizer & Gemini OCR", layout="wide"
-)
-st.title("🌺 Hybrid AI Engine: Trích Xuất Vector Chuẩn CNC")
-
-st.sidebar.header("⚙️ Cấu hình Hệ thống")
+# Sidebar cho API Key
+st.sidebar.header("🔑 Cấu hình API")
 api_key = st.sidebar.text_input("Nhập Gemini API Key:", type="password")
 
-if "width_mm" not in st.session_state:
-    st.session_state.width_mm = 2280.0
-if "height_mm" not in st.session_state:
-    st.session_state.height_mm = 810.0
+# ----------------------------------------------------
+# HELPER FUNCTIONS (CAD / CAM / VISION)
+# ----------------------------------------------------
 
-uploaded_file = st.file_uploader(
-    "Nạp ảnh hoa văn CNC (JPG, PNG):", type=["png", "jpg", "jpeg"]
+def process_image_contours(img_bytes):
+    """Sử dụng OpenCV để quét tất cả loại hình dạng (Contours) từ ảnh"""
+    image = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+    img_np = np.array(image)
+    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+    
+    # Khử nhiễu & Thresholding tự động
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    
+    # Tìm tất cả contours (bao gồm mọi hình dạng phức tạp/hoa văn)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    return img_np, contours
+
+def draw_dimensions_on_img(img_np, contours, target_width_mm=None):
+    """Vẽ đường viền và thể hiện kích thước lên ảnh"""
+    annotated = img_np.copy()
+    if not contours:
+        return annotated, 100.0, 100.0 # Default dimensions
+    
+    # Tìm Bounding Box cho toàn bộ vật thể
+    all_pts = np.vstack([cnt for cnt in contours])
+    x, y, w, h = cv2.boundingRect(all_pts)
+    
+    # Tính toán Scale nếu người dùng muốn tinh chỉnh chiều rộng cụ thể (mm)
+    pixel_width = w
+    pixel_height = h
+    
+    # Trực quan hóa Bounding Box và Kích thước
+    cv2.rectangle(annotated, (x, y), (x + w, y + h), (0, 255, 0), 2)
+    cv2.drawContours(annotated, contours, -1, (255, 0, 0), 1)
+    
+    label = f"W: {pixel_width}px, H: {pixel_height}px"
+    if target_width_mm:
+        scale = target_width_mm / pixel_width
+        mm_h = pixel_height * scale
+        label = f"W: {target_width_mm:.1f}mm, H: {mm_h:.1f}mm"
+        
+    cv2.putText(annotated, label, (x, max(y - 10, 20)), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+    return annotated, pixel_width, pixel_height
+
+def generate_dxf(contours, scale=1.0):
+    """Dựng lại file DXF từ Contours"""
+    doc = ezdxf.new('R2010')
+    msp = doc.modelspace()
+    
+    for cnt in contours:
+        # Làm mượt đường cong bằng approxPolyDP nếu cần
+        pts = cnt.reshape(-1, 2)
+        if len(pts) > 1:
+            # Chuyển đổi hệ tọa độ (OpenCV y hướng xuống, DXF y hướng lên)
+            dxf_pts = [(float(p[0]) * scale, -float(p[1]) * scale) for p in pts]
+            dxf_pts.append(dxf_pts[0]) # Đóng contour
+            msp.add_lwpolyline(dxf_pts)
+            
+    out_stream = io.StringIO()
+    doc.write(out_stream)
+    return out_stream.getvalue()
+
+def generate_gcode(contours, scale=1.0, feed_rate=1000, safe_z=5, cut_z=-1):
+    """Xuất mã G-Code từ Contours"""
+    gcode = [
+        "G21 ; Set units to mm",
+        "G90 ; Absolute positioning",
+        f"G0 Z{safe_z} ; Rapid move to safe Z",
+        "M3 S10000 ; Spindle ON"
+    ]
+    
+    for cnt in contours:
+        pts = cnt.reshape(-1, 2)
+        if len(pts) <= 1:
+            continue
+            
+        # Di chuyển tới điểm đầu
+        start_x, start_y = pts[0][0] * scale, -pts[0][1] * scale
+        gcode.append(f"G0 X{start_x:.3f} Y{start_y:.3f}")
+        gcode.append(f"G1 Z{cut_z} F300 ; Cut down")
+        
+        # Cắt theo contour
+        for p in pts[1:]:
+            x, y = p[0] * scale, -p[1] * scale
+            gcode.append(f"G1 X{x:.3f} Y{y:.3f} F{feed_rate}")
+            
+        # Cắt về điểm đầu và nhấc dao
+        gcode.append(f"G1 X{start_x:.3f} Y{start_y:.3f} F{feed_rate}")
+        gcode.append(f"G0 Z{safe_z}")
+        
+    gcode.append("M5 ; Spindle OFF")
+    gcode.append("G0 X0 Y0 ; Return Home")
+    gcode.append("M30 ; End of program")
+    return "\n".join(gcode)
+
+# ----------------------------------------------------
+# 1) GIAO DIỆN DASHBOARD - INPUT FILE
+# ----------------------------------------------------
+st.subheader("1️⃣ Tải lên File Ảnh hoặc DXF")
+col_input1, col_input2 = st.columns(2)
+
+with col_input1:
+    uploaded_image = st.file_uploader("Tải lên File Ảnh (PNG, JPG, JPEG)", type=["png", "jpg", "jpeg"])
+with col_input2:
+    uploaded_dxf = st.file_uploader("Tải lên File DXF", type=["dxf"])
+
+# Tự động đọc file input nếu có
+raw_img_np = None
+if uploaded_image:
+    img_bytes = uploaded_image.read()
+    raw_img_np, contours = process_image_contours(img_bytes)
+    st.session_state.detected_contours = contours
+elif uploaded_dxf:
+    st.info("Đã tải lên DXF. Hệ thống sẵn sàng trích xuất đường nét và tạo G-code.")
+
+st.divider()
+
+# ----------------------------------------------------
+# 4) KHU VỰC ĐẦU RA VÀ TƯƠNG TÁC AI
+# ----------------------------------------------------
+st.subheader("2️⃣ Điều khiển & Tinh chỉnh AI")
+
+# Tinh chỉnh thông số (Prompt / Yêu cầu kích thước)
+user_prompt = st.text_input(
+    "💬 Tương tác với AI để tinh chỉnh (VD: 'Tải bức ảnh lên muốn độ rộng của họa tiết hoa văn là 70mm'):",
+    placeholder="Nhập kích thước hoặc yêu cầu đặc biệt..."
 )
 
-if uploaded_file:
-    img_bytes = uploaded_file.getvalue()
+col_b1, col_b2, col_b3, col_b4 = st.columns(4)
 
-    col1, col2 = st.columns([1, 1])
+with col_b1:
+    btn_ai_process = st.button("🚀 1. AI Xử lý & Dựng lại", use_container_width=True)
+with col_b2:
+    btn_export_dxf = st.button("📐 2. Xuất File DXF", use_container_width=True)
+with col_b3:
+    btn_export_gcode = st.button("⚙️ 3. Xuất G-Code", use_container_width=True)
+with col_b4:
+    btn_ai_chat = st.button("💡 4. Tinh chỉnh theo Yêu cầu", use_container_width=True)
 
-    with col1:
-        st.subheader("🖼️ Ảnh Gốc Upload")
-        st.image(img_bytes, use_container_width=True)
-
-        if st.button("🤖 NÚT AI: Đọc Kích Thước Bản Vẽ (Gemini OCR)"):
-            if not api_key:
-                st.error("Vui lòng nhập Gemini API Key ở Sidebar!")
-            else:
-                with st.spinner("🤖 Gemini AI đang đọc kích thước..."):
-                    w, h = extract_dimensions_with_gemini(img_bytes, api_key)
-                    st.session_state.width_mm = w
-                    st.session_state.height_mm = h
-                    st.success(
-                        f"🎉 AI đã đọc thành công: Rộng {w}mm x Cao {h}mm"
-                    )
-
-    with col2:
-        st.subheader("📐 Thông Số Kích Thước Phôi & Khung Bao")
-
-        st.session_state.width_mm = st.number_input(
-            "Chiều RỘNG phôi (mm):", value=st.session_state.width_mm
-        )
-        st.session_state.height_mm = st.number_input(
-            "Chiều CAO phôi (mm):", value=st.session_state.height_mm
-        )
-
-        st.markdown("---")
-
-        frame_stroke = st.number_input(
-            "Độ rộng KHUNG BAO NGOÀI (mm):",
-            value=70.0,
-            step=5.0,
-            help="Hệ thống sẽ dựng khung chữ nhật toán học chính xác số mm này",
-        )
-
-        st.markdown("---")
-
-        if st.button("⚙️ NÚT CAD: Trích Xuất Vector & Tải File DXF"):
-            with st.spinner("Đang dựng khung và trích xuất hoa văn..."):
-                polygons = process_exact_pattern_with_custom_frame(
-                    img_bytes,
-                    st.session_state.width_mm,
-                    st.session_state.height_mm,
-                    frame_stroke_mm=frame_stroke,
+# ----------------------------------------------------
+# 2) AI SUY NGHĨ & BỘ XỬ LÝ TRUNG TÂM
+# ----------------------------------------------------
+if btn_ai_process or btn_ai_chat:
+    if not api_key:
+        st.error("Vui lòng nhập Gemini API Key ở thanh bên (Sidebar) để kích hoạt AI!")
+    elif uploaded_image is None and uploaded_dxf is None:
+        st.warning("Vui lòng tải lên file ảnh hoặc DXF trước!")
+    else:
+        with st.spinner("AI đang suy nghĩ, phân tích kích thước và tối ưu hóa CAD/CAM..."):
+            client = genai.Client(api_key=api_key)
+            
+            # Đọc kích thước từ Contour
+            contours = st.session_state.detected_contours
+            annotated_img, px_w, px_h = draw_dimensions_on_img(raw_img_np, contours)
+            
+            # Gửi thông tin cho Gemini AI "Suy nghĩ"
+            prompt_text = f"""
+            Bạn là một kỹ sư CAD/CAM AI cao cấp. 
+            Ảnh/Vật thể đầu vào có kích thước pixel: Width={px_w}px, Height={px_h}px.
+            Yêu cầu từ người dùng: "{user_prompt if user_prompt else 'Phân tích hình dạng và tối ưu hóa để xuất CAD/Gcode'}".
+            
+            Hãy suy nghĩ và thực hiện các bước sau:
+            1. Phân tích hình dạng vật thể (Đường cong, họa tiết hoa văn, hay hình học đơn giản).
+            2. Xác định tỉ lệ scale thích hợp dựa trên yêu cầu người dùng (Ví dụ nếu người dùng yêu cầu rộng 70mm, tính scale = 70 / {px_w}).
+            3. Đưa ra hướng dẫn tạo file DXF và thông số cắt G-Code (Feedrate, Safe Z, Cut Z).
+            Trả về câu trả lời phân tích ngắn gọn, chuyên nghiệp và trích xuất rõ ràng giá trị scale_mm (Ví dụ: SCALE_MM: 0.123).
+            """
+            
+            try:
+                # Gọi Model Gemini 2.5
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=[prompt_text]
                 )
+                
+                st.session_state.ai_thoughts = response.text
+                
+                # Trích xuất chiều rộng mong muốn từ user_prompt nếu có (VD: 70mm)
+                import re
+                match = re.search(r'(\d+(\.\d+)?)\s*mm', user_prompt.lower())
+                if match:
+                    target_w = float(match.group(1))
+                    scale = target_w / px_w
+                else:
+                    scale = 1.0 # Mặc định 1px = 1mm nếu không chỉ định
+                    
+                st.session_state.scale_factor = scale
+                
+                # Tiến hành tái tạo DXF & G-Code dựa trên suy nghĩ của AI
+                st.session_state.dxf_content = generate_dxf(contours, scale=scale)
+                st.session_state.gcode_content = generate_gcode(contours, scale=scale)
+                
+                # Cập nhật ảnh có thể hiện kích thước mm
+                final_annotated, _, _ = draw_dimensions_on_img(raw_img_np, contours, target_width_mm=px_w*scale)
+                st.session_state.processed_image = final_annotated
+                
+                st.success("AI đã hoàn tất suy nghĩ và dựng lại mô hình!")
+                
+            except Exception as e:
+                st.error(f"Lỗi khi kết nối với AI: {e}")
 
-                dxf_bytes = create_dxf_file(polygons)
+# ----------------------------------------------------
+# 3) HIỂN THỊ KẾT QUẢ SO SÁNH & ĐẦU RA
+# ----------------------------------------------------
+st.divider()
+st.subheader("3️⃣ Kết quả Tối ưu & So sánh Kích thước")
 
-            st.success(
-                f"✅ Đã tạo thành công **{len(polygons)}** đường nét cắt DXF chuẩn xác!"
-            )
+col_img1, col_img2 = st.columns(2)
 
-            st.download_button(
-                label=f"💾 TẢI FILE DXF (Khung {int(frame_stroke)}mm - Hoa văn nguyên bản)",
-                data=dxf_bytes,
-                file_name=f"Hoa_Van_CNC_Khung_{int(frame_stroke)}mm.dxf",
-                mime="application/dxf",
-            )
+with col_img1:
+    st.markdown("**🖼️ Ảnh Gốc Tải Lên**")
+    if uploaded_image:
+        st.image(uploaded_image, use_container_width=True)
+    else:
+        st.info("Chưa có ảnh gốc.")
+
+with col_img2:
+    st.markdown("**🎯 Ảnh Sau Xử Lý (Thể hiện Kích thước & Contour)**")
+    if st.session_state.processed_image is not None:
+        st.image(st.session_state.processed_image, use_container_width=True)
+    else:
+        st.info("Nhấn 'AI Xử lý' để xem kết quả.")
+
+# Hiển thị suy nghĩ của AI
+if st.session_state.ai_thoughts:
+    with st.expander("🧠 Xem AI Suy Nghĩ & Phân Tích Chi Tiết", expanded=True):
+        st.write(st.session_state.ai_thoughts)
+
+# Nút Tải Xuất File DXF và G-Code
+st.divider()
+col_dl1, col_dl2 = st.columns(2)
+
+with col_dl1:
+    if st.session_state.dxf_content:
+        st.download_button(
+            label="💾 Tải về File DXF",
+            data=st.session_state.dxf_content,
+            file_name="output_ai_cad.dxf",
+            mime="application/dxf",
+            use_container_width=True
+        )
+
+with col_dl2:
+    if st.session_state.gcode_content:
+        st.download_button(
+            label="💾 Tải về File G-Code (.nc)",
+            data=st.session_state.gcode_content,
+            file_name="output_ai_cam.nc",
+            mime="text/plain",
+            use_container_width=True
+        )
