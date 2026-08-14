@@ -9,11 +9,13 @@ from google.genai import types
 import numpy as np
 from PIL import Image
 from pydantic import BaseModel, Field
+from shapely.geometry import LineString, MultiPolygon, Polygon
+from shapely.ops import unary_union
 import streamlit as st
 
 
 # ==============================================================================
-# 1. GEMINI OCR SCHEMA & PARSER (ĐỌC KÍCH THƯỚC BẢN VẼ)
+# 1. GEMINI OCR SCHEMA & PARSER
 # ==============================================================================
 class DrawingDimensions(BaseModel):
     width_mm: float = Field(
@@ -25,13 +27,12 @@ class DrawingDimensions(BaseModel):
 
 
 def extract_dimensions_with_gemini(image_bytes, api_key):
-    """Sử dụng Gemini AI để đọc thông số kích thước cơ khí từ ghi chú trên ảnh."""
+    """Sử dụng Gemini AI để đọc thông số kích thước từ ghi chú trên ảnh."""
     try:
         client = genai.Client(api_key=api_key)
         img = Image.open(io.BytesIO(image_bytes))
 
         prompt = """
-        Bạn là chuyên gia đọc bản vẽ cơ khí OCR.
         Hãy đọc các con số ghi chú kích thước tổng thể trên bức ảnh này:
         1. Chiều rộng tổng thể (Ví dụ: 810mm).
         2. Chiều cao tổng thể (Ví dụ: 2280mm).
@@ -50,75 +51,90 @@ def extract_dimensions_with_gemini(image_bytes, api_key):
         data = json.loads(response.text.strip())
         w = data.get("width_mm", 810.0)
         h = data.get("height_mm", 2280.0)
-
-        # Tự động quy đổi cạnh ngắn là Rộng, cạnh dài là Cao
         return min(w, h), max(w, h)
     except Exception as e:
         st.warning(
-            f"⚠️ Không đọc được OCR ({e}). Tự động dùng kích thước mặc định: 810mm x 2280mm."
+            f"⚠️ Không đọc được OCR ({e}). Dùng kích thước mặc định: 810mm x 2280mm."
         )
         return 810.0, 2280.0
 
 
 # ==============================================================================
-# 2. XỬ LÝ HOA VĂN: CROP CHUẨN & TRÍCH XUẤT VECTOR NGUYÊN BẢN
+# 2. XỬ LÝ HÌNH HỌC CAD: ÉP NẾT 70MM SẠCH SẼ (KHÔNG LỖI VÒNG TRÒN ĐÈ NHAU)
 # ==============================================================================
-def process_pattern_direct_contours(
-    image_bytes, target_w_mm=810.0, target_h_mm=2280.0
+def process_pattern_exact_70mm(
+    image_bytes, target_w_mm=810.0, target_h_mm=2280.0, stroke_width_mm=70.0
 ):
-    """Trích xuất chính xác 100% đường viền hoa văn từ ảnh đứng chuẩn mà không làm biến dạng."""
+    """Trích xuất đường viền và sử dụng Hình học Shapely để tạo nét 70mm chuẩn CAD."""
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # 1. Binarize để tách màu hoa văn nâu ra khỏi nền trắng
+    # 1. Binarize ảnh
     _, thresh = cv2.threshold(
         gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
     )
 
-    # 2. Tự động tìm Bounding Box của sản phẩm chính để CROP BỎ 100% chữ kích thước & mũi tên
+    # 2. Crop bỏ sạch chữ kích thước xung quanh bằng Bounding Box
     contours_all, _ = cv2.findContours(
         thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
-
     if not contours_all:
         return [], (thresh.shape[1], thresh.shape[0])
 
-    # Tìm contour lớn nhất (chính là toàn bộ tấm khung gỗ hoa văn)
     main_contour = max(contours_all, key=cv2.contourArea)
     x, y, w, h = cv2.boundingRect(main_contour)
-
-    # Crop chính xác duy nhất vùng tấm phôi hoa văn
     pattern_crop = thresh[y : y + h, x : x + w]
 
-    # 3. Tính tỉ lệ Scale Pixel -> mm dựa trên kích thước thực tế
     scale_x = target_w_mm / w
     scale_y = target_h_mm / h
 
-    # 4. Trích xuất toàn bộ đường viền (Khung ngoài + các lỗ uốn lượn bên trong)
-    contours, hierarchy = cv2.findContours(
+    # 3. Trích xuất các đường Contour ban đầu
+    contours, _ = cv2.findContours(
         pattern_crop, cv2.RETR_TREE, cv2.CHAIN_APPROX_TC89_KCOS
     )
 
-    pattern_polygons = []
+    lines_shapely = []
+    half_stroke = stroke_width_mm / 2.0  # Lấy 35mm mỗi bên
+
     for cnt in contours:
-        # Loại bỏ các vết nhiễu quá nhỏ
-        if cv2.contourArea(cnt) < 30:
+        if cv2.contourArea(cnt) < 20:
             continue
 
-        # Làm mượt đường nét uốn lượn
-        epsilon = 0.0012 * cv2.arcLength(cnt, True)
+        epsilon = 0.0015 * cv2.arcLength(cnt, True)
         approx = cv2.approxPolyDP(cnt, epsilon, True)
 
         pts = []
         for p in approx:
             px, py = p[0][0], p[0][1]
-            # Tọa độ thực tế theo mm (Đảo trục Y cho hệ tọa độ CAD)
+            # Đảo trục Y cho CAD
             pts.append((px * scale_x, (h - py) * scale_y))
 
         if len(pts) > 2:
-            pts.append(pts[0])  # Khép kín đường vector
-            pattern_polygons.append(pts)
+            pts.append(pts[0])
+            line = LineString(pts)
+            # Dùng join_style=2 (mitre) để KHÔNG TẠO BỌC TRÒN
+            buffered = line.buffer(
+                half_stroke, cap_style=2, join_style=2, mitre_limit=2.0
+            )
+            if buffered.is_valid and not buffered.is_empty:
+                lines_shapely.append(buffered)
+
+    # 4. HỢP NHẤT HÌNH HỌC (UNARY UNION) - Triệt tiêu hoàn toàn các nét đè chồng
+    unified_geometry = unary_union(lines_shapely)
+
+    pattern_polygons = []
+
+    def extract_coords(geom):
+        if isinstance(geom, Polygon):
+            pattern_polygons.append(list(geom.exterior.coords))
+            for interior in geom.interiors:
+                pattern_polygons.append(list(interior.coords))
+        elif isinstance(geom, MultiPolygon):
+            for poly in geom.geoms:
+                extract_coords(poly)
+
+    extract_coords(unified_geometry)
 
     return pattern_polygons, (w, h)
 
@@ -126,20 +142,18 @@ def process_pattern_direct_contours(
 # ==============================================================================
 # 3. XUẤT FILE DXF CHUẨN CẮT CNC
 # ==============================================================================
-def create_dxf_file(pattern_polygons, total_w_mm, total_h_mm):
-    """Xuất file DXF chứa đầy đủ đường cắt hoa văn chuẩn kích thước."""
+def create_dxf_file(pattern_polygons):
+    """Xuất file DXF chứa đường cắt hoa văn đã hợp nhất chuẩn nét."""
     doc = ezdxf.new("R2010")
     msp = doc.modelspace()
 
-    # Tạo Layer riêng cho máy CNC dễ phân biệt
-    doc.layers.add(name="HOA_VAN_CNC", color=1)  # Đỏ (Toàn bộ nét hoa văn)
+    doc.layers.add(name="HOA_VAN_70MM", color=1)  # Layer màu đỏ
 
-    # Vẽ các dải vector hoa văn đã trích xuất
     for poly in pattern_polygons:
-        msp.add_lwpolyline(poly, dxfattribs={"layer": "HOA_VAN_CNC"})
+        msp.add_lwpolyline(poly, dxfattribs={"layer": "HOA_VAN_70MM"})
 
     tmp_dir = tempfile.mkdtemp()
-    filepath = os.path.join(tmp_dir, "Hoa_Van_CNC_Precision.dxf")
+    filepath = os.path.join(tmp_dir, "Hoa_Van_Fix_70mm.dxf")
     doc.saveas(filepath)
 
     with open(filepath, "rb") as f:
@@ -154,12 +168,15 @@ def create_dxf_file(pattern_polygons, total_w_mm, total_h_mm):
 st.set_page_config(
     page_title="Auto CAD Vectorizer & Gemini OCR", layout="wide"
 )
-st.title("🌺 Hybrid AI Engine: Chuyển Ảnh Hoa Văn CNC Sang File DXF Kỹ Thuật")
+st.title("🌺 Hybrid AI Engine: Ép Chuẩn Nét 70mm (Thuật Toán Shapely Union)")
 
 st.sidebar.header("⚙️ Cấu hình Hệ thống")
 api_key = st.sidebar.text_input("Nhập Gemini API Key:", type="password")
 
-# Lưu trữ kích thước mặc định
+fixed_stroke = st.sidebar.number_input(
+    "Độ rộng nét hoa văn (mm):", value=70.0, step=5.0
+)
+
 if "width_mm" not in st.session_state:
     st.session_state.width_mm = 810.0
 if "height_mm" not in st.session_state:
@@ -178,14 +195,11 @@ if uploaded_file:
         st.subheader("🖼️ Ảnh Gốc Upload")
         st.image(img_bytes, use_container_width=True)
 
-        # -------------------------------------------------------------
-        # NÚT BẤM 1: DÙNG GEMINI AI ĐỂ ĐỌC KÍCH THƯỚC
-        # -------------------------------------------------------------
         if st.button("🤖 NÚT AI: Đọc Kích Thước Bản Vẽ (Gemini OCR)"):
             if not api_key:
-                st.error("Vui lòng nhập Gemini API Key ở Sidebar thanh bên!")
+                st.error("Vui lòng nhập Gemini API Key ở Sidebar!")
             else:
-                with st.spinner("🤖 Gemini AI đang quét con số trên ảnh..."):
+                with st.spinner("🤖 Gemini AI đang đọc kích thước..."):
                     w, h = extract_dimensions_with_gemini(img_bytes, api_key)
                     st.session_state.width_mm = w
                     st.session_state.height_mm = h
@@ -194,9 +208,8 @@ if uploaded_file:
                     )
 
     with col2:
-        st.subheader("📐 Thông Số & Xuất File DXF")
+        st.subheader("📐 Bảng Điều Chỉnh & Xuất DXF")
 
-        # Cho phép người dùng kiểm tra/chỉnh sửa con số sau khi AI đọc
         st.session_state.width_mm = st.number_input(
             "Chiều rộng phôi (mm):", value=st.session_state.width_mm
         )
@@ -206,30 +219,24 @@ if uploaded_file:
 
         st.markdown("---")
 
-        # -------------------------------------------------------------
-        # NÚT BẤM 2: TRÍCH XUẤT VECTOR & TẢI FILE DXF
-        # -------------------------------------------------------------
-        if st.button("⚙️ NÚT CAD: Trích Xuất Vector & Tạo File DXF"):
-            with st.spinner("Đang tự động crop viền & trích xuất vector..."):
-                pattern_polygons, (w_px, h_px) = process_pattern_direct_contours(
+        if st.button("⚙️ NÚT CAD: Hợp Nhất Shape & Xuất DXF 70mm"):
+            with st.spinner(
+                f"Đang tính toán hợp nhất hình học nét {fixed_stroke}mm..."
+            ):
+                pattern_polygons, (w_px, h_px) = process_pattern_exact_70mm(
                     img_bytes,
                     st.session_state.width_mm,
                     st.session_state.height_mm,
+                    stroke_width_mm=fixed_stroke,
                 )
 
-                dxf_bytes = create_dxf_file(
-                    pattern_polygons,
-                    st.session_state.width_mm,
-                    st.session_state.height_mm,
-                )
+                dxf_bytes = create_dxf_file(pattern_polygons)
 
-            st.success(
-                f"✅ Đã trích xuất xong **{len(pattern_polygons)}** đường nét vector chuẩn xác!"
-            )
+            st.success("✅ Đã xử lý hợp nhất hình học thành công!")
 
             st.download_button(
-                label="💾 TẢI FILE DXF CẮT CNC CHUẨN KÍCH THƯỚC",
+                label="💾 TẢI FILE DXF CẮT CNC (SẠCH NẾT 70MM)",
                 data=dxf_bytes,
-                file_name="Hoa_Van_CNC_Chuandxf.dxf",
+                file_name=f"Hoa_Van_Clean_{int(fixed_stroke)}mm.dxf",
                 mime="application/dxf",
             )
