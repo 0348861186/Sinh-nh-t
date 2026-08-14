@@ -12,21 +12,21 @@ import matplotlib.pyplot as plt
 
 
 # ============================================================
-# CẤU HÌNH TRANG
+# CẤU HÌNH
 # ============================================================
 
 st.set_page_config(
-    page_title="Bảng Điều Khiển AI CAD/CAM",
+    page_title="AI CAD/CAM Dashboard",
     page_icon="🤖",
     layout="wide"
 )
 
-st.title("🤖 Bảng Điều Khiển AI CAD/CAM")
-st.caption("Hình ảnh / DXF → Hình học → DXF / Mã G-Code")
+st.title("🤖 AI CAD/CAM Dashboard")
+st.caption("Image / DXF → Geometry → DXF / G-Code")
 
 
 # ============================================================
-# TRẠNG THÁI PHIÊN (SESSION STATE)
+# TRẠNG THÁI PHIÊN LÀM VIỆC (SESSION STATE)
 # ============================================================
 
 DEFAULT_STATE = {
@@ -105,7 +105,7 @@ def geometry_bounds(geometry):
 
 
 def geometry_size(geometry):
-    """Trả về Chiều rộng / Chiều cao."""
+    """Trả về Width / Height."""
 
     min_x, min_y, max_x, max_y = geometry_bounds(geometry)
 
@@ -143,7 +143,7 @@ def point_distance(p1, p2):
 
 
 # ============================================================
-# XỬ LÝ HÌNH ẢNH
+# XỬ LÝ HÌNH ẢNH (IMAGE PROCESSING)
 # ============================================================
 
 def process_image_contours(
@@ -152,7 +152,7 @@ def process_image_contours(
     threshold_mode="OTSU"
 ):
     """
-    Hình ảnh → Các contour OpenCV.
+    Image → OpenCV contours.
     """
 
     image = Image.open(
@@ -211,7 +211,7 @@ def process_image_contours(
         )
 
     # -----------------------------------------
-    # Làm sạch hình thái học (Morphological cleanup)
+    # Dọn dẹp hình thái học (Morphological cleanup)
     # -----------------------------------------
 
     kernel = np.ones((3, 3), np.uint8)
@@ -229,7 +229,7 @@ def process_image_contours(
     )
 
     # -----------------------------------------
-    # Tìm đường viền (Contours)
+    # Tìm các contour
     # -----------------------------------------
 
     contours, hierarchy = cv2.findContours(
@@ -261,7 +261,7 @@ def process_image_contours(
         ]
 
         # -----------------------------------------
-        # Xác định lỗ thủng (hole) bằng cây phân cấp (hierarchy)
+        # Xác định hole (lỗ trong) bằng hierarchy
         # -----------------------------------------
 
         is_hole = False
@@ -286,7 +286,7 @@ def process_image_contours(
 
 
 # ============================================================
-# ĐƠN GIẢN HÓA HÌNH HỌC (SIMPLIFICATION)
+# ĐƠN GIẢN HÓA HÌNH HỌC (GEOMETRY SIMPLIFICATION)
 # ============================================================
 
 def simplify_geometry(
@@ -297,7 +297,7 @@ def simplify_geometry(
     Giảm số lượng đỉnh (vertex).
 
     tolerance_px:
-        Độ dung sai tính bằng pixel đối với Hình ảnh.
+        Độ dung sai tính bằng pixel đối với Image.
     """
 
     result = []
@@ -347,12 +347,12 @@ def simplify_geometry(
 
 
 # ============================================================
-# TRÌNH ĐỌC FILE DXF
+# BỘ ĐỌC TỆP DXF (DXF READER)
 # ============================================================
 
 def read_dxf_file(dxf_bytes):
     """
-    Đọc các thực thể cơ bản từ DXF:
+    Đọc các entity cơ bản từ DXF:
 
     LINE
     LWPOLYLINE
@@ -385,7 +385,7 @@ def read_dxf_file(dxf_bytes):
         dxftype = entity.dxftype()
 
         # =====================================
-        # LINE (ĐƯỜNG THẲNG)
+        # Đoạn thẳng (LINE)
         # =====================================
 
         if dxftype == "LINE":
@@ -407,7 +407,7 @@ def read_dxf_file(dxf_bytes):
             )
 
         # =====================================
-        # LWPOLYLINE (ĐA TUYẾN TRỌNG LƯỢNG NHẸ)
+        # Đa tuyến nhẹ (LWPOLYLINE)
         # =====================================
 
         elif dxftype == "LWPOLYLINE":
@@ -438,7 +438,7 @@ def read_dxf_file(dxf_bytes):
                 )
 
         # =====================================
-        # POLYLINE (ĐA TUYẾN)
+        # Đa tuyến (POLYLINE)
         # =====================================
 
         elif dxftype == "POLYLINE":
@@ -471,7 +471,7 @@ def read_dxf_file(dxf_bytes):
                 )
 
         # =====================================
-        # CIRCLE (ĐƯỜNG TRÒN)
+        # Đường tròn (CIRCLE)
         # =====================================
 
         elif dxftype == "CIRCLE":
@@ -517,7 +517,7 @@ def read_dxf_file(dxf_bytes):
             )
 
         # =====================================
-        # ARC (CUNG TRÒN)
+        # Cung tròn (ARC)
         # =====================================
 
         elif dxftype == "ARC":
@@ -588,7 +588,7 @@ def read_dxf_file(dxf_bytes):
 
 
 # ============================================================
-# CHUYỂN ĐỔI TỌA ĐỘ HÌNH ẢNH
+# CHUYỂN ĐỔI TỌA ĐỘ ẢNH (IMAGE COORDINATE CONVERSION)
 # ============================================================
 
 def convert_image_geometry_to_mm(
@@ -596,11 +596,11 @@ def convert_image_geometry_to_mm(
     scale_mm_per_pixel
 ):
     """
-    Hình ảnh:
+    Image:
         X → X
         Y ↓
 
-    Máy CNC / CAD:
+    Machine/CAD:
         X → X
         Y ↑
 
@@ -642,7 +642,7 @@ def convert_image_geometry_to_mm(
 
 
 # ============================================================
-# THAY ĐỔI TỶ LỆ (SCALE) DXF
+# THAY ĐỔI TỶ LỆ DXF (SCALE DXF)
 # ============================================================
 
 def scale_geometry(
@@ -676,7 +676,7 @@ def scale_geometry(
 
 
 # ============================================================
-# THIẾT LẬP GỐC TỌA ĐỘ G54 (WORK ZERO)
+# GỐC TỌA ĐỘ GIA CÔNG (WORK ZERO)
 # ============================================================
 
 def apply_work_zero(
@@ -684,7 +684,7 @@ def apply_work_zero(
     work_zero
 ):
     """
-    Căn chỉnh geometry theo gốc tọa độ máy đã chọn.
+    Align geometry to selected machine origin.
     """
 
     min_x, min_y, max_x, max_y = (
@@ -757,18 +757,18 @@ def apply_work_zero(
 
 
 # ============================================================
-# SẮP XẾP THỨ TỰ CẮT
+# SẮP XẾP THỨ TỰ CẮT (SORT CUT ORDER)
 # ============================================================
 
 def sort_geometry_for_cutting(
     geometry
 ):
     """
-    Đường viền trong (hole) cắt trước.
-    Đường viền ngoài (outer) cắt sau.
+    Inner contours first.
+    Outer contours last.
 
     Nếu không xác định được hole,
-    dùng diện tích nhỏ → lớn.
+    dùng area nhỏ → lớn.
     """
 
     def sort_key(item):
@@ -777,7 +777,7 @@ def sort_geometry_for_cutting(
             item["points"]
         )
 
-        # Lỗ thủng (Hole) ưu tiên trước
+        # Hole ưu tiên trước
         hole_priority = (
             0
             if item["is_hole"]
@@ -796,7 +796,7 @@ def sort_geometry_for_cutting(
 
 
 # ============================================================
-# TRÌNH TẠO FILE DXF
+# TẠO FILE DXF (DXF GENERATOR)
 # ============================================================
 
 def generate_dxf(
@@ -859,7 +859,7 @@ def generate_dxf(
 
 
 # ============================================================
-# TRÌNH TẠO MÃ G-CODE
+# TẠO MÃ G-CODE (G-CODE GENERATOR)
 # ============================================================
 
 def generate_gcode(
@@ -874,7 +874,7 @@ def generate_gcode(
     """
     Geometry → G-Code.
 
-    Đường viền bên trong được cắt trước đường viền bên ngoài.
+    Inner contours được cắt trước outer contours.
     """
 
     geometry = sort_geometry_for_cutting(
@@ -887,22 +887,22 @@ def generate_gcode(
         "; ========================================="
     )
     lines.append(
-        "; Ma G-Code duoc tao boi AI CAD/CAM"
+        "; AI CAD/CAM Generated G-Code"
     )
     lines.append(
         "; ========================================="
     )
 
     lines.append(
-        "G21 ; Don vi: mm"
+        "G21 ; Units: mm"
     )
 
     lines.append(
-        "G90 ; Toa do tuyet doi"
+        "G90 ; Absolute positioning"
     )
 
     lines.append(
-        "G17 ; Mat phang XY"
+        "G17 ; XY plane"
     )
 
     lines.append(
@@ -930,23 +930,23 @@ def generate_gcode(
         start_x, start_y = points[0]
 
         lines.append(
-            f"; --- Duong vien {index} ---"
+            f"; --- Contour {index} ---"
         )
 
         if item["is_hole"]:
 
             lines.append(
-                "; Duong vien trong / Lo thung"
+                "; Inner contour / hole"
             )
 
         else:
 
             lines.append(
-                "; Duong vien ngoai"
+                "; Outer contour"
             )
 
         # -------------------------------------
-        # Di chuyển đến điểm bắt đầu
+        # Di chuyển đến điểm bắt đầu (Move to start)
         # -------------------------------------
 
         lines.append(
@@ -964,7 +964,7 @@ def generate_gcode(
         )
 
         # -------------------------------------
-        # Gi công cắt (Cutting)
+        # Cắt gia công (Cutting)
         # -------------------------------------
 
         for x, y in points[1:]:
@@ -976,7 +976,7 @@ def generate_gcode(
             )
 
         # -------------------------------------
-        # Đóng đường viền
+        # Đóng contour (Close contour)
         # -------------------------------------
 
         if item["closed"]:
@@ -988,7 +988,7 @@ def generate_gcode(
             )
 
         # -------------------------------------
-        # Rút dao (Retract)
+        # Rút dao lên (Retract)
         # -------------------------------------
 
         lines.append(
@@ -998,11 +998,11 @@ def generate_gcode(
         lines.append("")
 
     # -----------------------------------------
-    # Kết thúc
+    # Kết thúc (End)
     # -----------------------------------------
 
     lines.append(
-        "M5 ; Tat truc chinh"
+        "M5 ; Spindle OFF"
     )
 
     lines.append(
@@ -1010,23 +1010,23 @@ def generate_gcode(
     )
 
     lines.append(
-        "G0 X0 Y0 ; Ve goc toa do"
+        "G0 X0 Y0 ; Return Home"
     )
 
     lines.append(
-        "M30 ; Ket thuc chuong trinh"
+        "M30 ; Program End"
     )
 
     return "\n".join(lines)
 
 
 # ============================================================
-# TRÌNH XEM TRƯỚC (PREVIEW)
+# XEM TRƯỚC HÌNH HỌC (PREVIEW)
 # ============================================================
 
 def create_geometry_preview(
     geometry,
-    title="Xem Trước Hình Học"
+    title="Geometry Preview"
 ):
     """
     Vẽ geometry bằng Matplotlib.
@@ -1079,7 +1079,7 @@ def create_geometry_preview(
 
 
 # ============================================================
-# HÌNH ẢNH CÓ CHÚ THÍCH KÍCH THƯỚC
+# ẢNH CÓ CHÚ THÍCH KÍCH THƯỚC (ANNOTATED IMAGE)
 # ============================================================
 
 def draw_dimensions_on_img(
@@ -1116,7 +1116,7 @@ def draw_dimensions_on_img(
     )
 
     # -----------------------------------------
-    # Bounding box (Khung bao)
+    # Khung bao (Bounding box)
     # -----------------------------------------
 
     cv2.rectangle(
@@ -1150,7 +1150,7 @@ def draw_dimensions_on_img(
         )
 
     # -----------------------------------------
-    # Nhãn hiển thị kích thước
+    # Nhãn hiển thị (Label)
     # -----------------------------------------
 
     if target_width_mm:
@@ -1167,14 +1167,14 @@ def draw_dimensions_on_img(
         )
 
         label = (
-            f"Rong: {target_width_mm:.2f} mm | "
-            f"Cao: {height_mm:.2f} mm"
+            f"W: {target_width_mm:.2f} mm | "
+            f"H: {height_mm:.2f} mm"
         )
 
     else:
 
         label = (
-            f"Rong: {w}px | Cao: {h}px"
+            f"W: {w}px | H: {h}px"
         )
 
     cv2.putText(
@@ -1250,7 +1250,7 @@ Trả lời chuyên nghiệp, ngắn gọn.
 # ============================================================
 
 st.sidebar.header(
-    "🔑 Cấu hình AI"
+    "🔑 AI Configuration"
 )
 
 api_key = st.sidebar.text_input(
@@ -1261,18 +1261,18 @@ api_key = st.sidebar.text_input(
 st.sidebar.divider()
 
 st.sidebar.header(
-    "⚙️ Xử lý hình ảnh"
+    "⚙️ Image Processing"
 )
 
 min_area_px = st.sidebar.number_input(
-    "Diện tích contour tối thiểu (px²)",
+    "Minimum contour area (px²)",
     min_value=1,
     value=20,
     step=1
 )
 
 threshold_mode = st.sidebar.selectbox(
-    "Chế độ phân ngưỡng (Threshold)",
+    "Threshold Mode",
     [
         "OTSU",
         "ADAPTIVE",
@@ -1281,7 +1281,7 @@ threshold_mode = st.sidebar.selectbox(
 )
 
 simplify_tolerance = st.sidebar.number_input(
-    "Dung sai đường viền (pixel)",
+    "Contour tolerance (pixel)",
     min_value=0.0,
     value=1.0,
     step=0.1
@@ -1293,7 +1293,7 @@ simplify_tolerance = st.sidebar.number_input(
 # ============================================================
 
 st.subheader(
-    "1️⃣ Dữ liệu đầu vào"
+    "1️⃣ Input"
 )
 
 col1, col2 = st.columns(2)
@@ -1301,7 +1301,7 @@ col1, col2 = st.columns(2)
 with col1:
 
     uploaded_image = st.file_uploader(
-        "🖼️ Tải lên hình ảnh",
+        "🖼️ Upload Image",
         type=[
             "png",
             "jpg",
@@ -1315,7 +1315,7 @@ with col1:
 with col2:
 
     uploaded_dxf = st.file_uploader(
-        "📐 Tải lên tệp DXF",
+        "📐 Upload DXF",
         type=["dxf"]
     )
 
@@ -1360,19 +1360,19 @@ if uploaded_image:
         st.session_state.source_height = height_px
 
         st.success(
-            f"Đã nhận Hình ảnh: "
-            f"{len(geometry)} đường viền (contour)"
+            f"Đã nhận Image: "
+            f"{len(geometry)} contour"
         )
 
     except Exception as e:
 
         st.error(
-            f"Lỗi xử lý Hình ảnh: {e}"
+            f"Lỗi xử lý Image: {e}"
         )
 
 
 # ============================================================
-# TẢI FILE DXF (LOAD DXF)
+# TẢI TỆP DXF (LOAD DXF)
 # ============================================================
 
 elif uploaded_dxf:
@@ -1401,19 +1401,19 @@ elif uploaded_dxf:
         st.session_state.source_height = height
 
         st.success(
-            f"Đã đọc file DXF: "
-            f"{len(geometry)} thực thể (entities)"
+            f"Đã đọc DXF: "
+            f"{len(geometry)} entities"
         )
 
     except Exception as e:
 
         st.error(
-            f"Lỗi đọc file DXF: {e}"
+            f"Lỗi đọc DXF: {e}"
         )
 
 
 # ============================================================
-# DỪNG CHƯƠNG TRÌNH NẾU KHÔNG CÓ ĐẦU VÀO
+# DỪNG LẠI NẾU KHÔNG CÓ ĐẦU VÀO (STOP IF NO INPUT)
 # ============================================================
 
 geometry = st.session_state.geometry
@@ -1421,20 +1421,20 @@ geometry = st.session_state.geometry
 if not geometry:
 
     st.info(
-        "Vui lòng tải lên Hình ảnh hoặc tệp DXF."
+        "Vui lòng upload Image hoặc DXF."
     )
 
     st.stop()
 
 
 # ============================================================
-# THÔNG TIN NGUỒN (SOURCE INFORMATION)
+# THÔNG TIN DỮ LIỆU NGUỒN (SOURCE INFORMATION)
 # ============================================================
 
 st.divider()
 
 st.subheader(
-    "2️⃣ Thông tin hình học gốc"
+    "2️⃣ Geometry Information"
 )
 
 width, height = geometry_size(
@@ -1445,26 +1445,26 @@ c1, c2, c3, c4 = st.columns(4)
 
 with c1:
     st.metric(
-        "Số thực thể",
+        "Entities",
         len(geometry)
     )
 
 with c2:
     st.metric(
-        "Rộng (Nguồn)",
+        "Source Width",
         f"{width:.3f}"
     )
 
 with c3:
     st.metric(
-        "Cao (Nguồn)",
+        "Source Height",
         f"{height:.3f}"
     )
 
 with c4:
 
     st.metric(
-        "Nguồn dữ liệu",
+        "Source",
         st.session_state.source_type
     )
 
@@ -1474,18 +1474,18 @@ with c4:
 # ============================================================
 
 st.subheader(
-    "3️⃣ Kích thước & Tỷ lệ quy đổi"
+    "3️⃣ Dimension & Scale"
 )
 
 if st.session_state.source_type == "image":
 
     st.info(
-        "Hình ảnh được quy đổi từ pixel sang mm. "
+        "Image được quy đổi từ pixel sang mm. "
         "Bạn cần cung cấp kích thước thực tế."
     )
 
     target_width_mm = st.number_input(
-        "Chiều rộng mục tiêu (mm)",
+        "Target Width (mm)",
         min_value=0.001,
         value=100.0,
         step=1.0
@@ -1509,7 +1509,7 @@ if st.session_state.source_type == "image":
     )
 
     st.write(
-        f"**Tỷ lệ Scale:** "
+        f"**Scale:** "
         f"{scale_mm_per_pixel:.6f} mm/pixel"
     )
 
@@ -1527,7 +1527,7 @@ else:
     )
 
     scale_dxf = st.number_input(
-        "Tỷ lệ Scale DXF",
+        "DXF Scale",
         min_value=0.000001,
         value=1.0,
         step=0.1
@@ -1541,11 +1541,11 @@ else:
 
 
 # ============================================================
-# ĐIỀU CHỈNH KÍCH THƯỚC CUỐI CÙNG (TARGET DIMENSION)
+# ĐIỀU CHỈNH KÍCH THƯỚC ĐẦU RA (TARGET DIMENSION ADJUSTMENT)
 # ============================================================
 
 st.subheader(
-    "4️⃣ Kích thước thành phẩm"
+    "4️⃣ Final Dimension"
 )
 
 current_width, current_height = (
@@ -1559,7 +1559,7 @@ fc1, fc2 = st.columns(2)
 with fc1:
 
     final_width = st.number_input(
-        "Chiều rộng thành phẩm (mm)",
+        "Final Width (mm)",
         min_value=0.001,
         value=float(
             round(
@@ -1583,12 +1583,12 @@ with fc2:
     )
 
     st.metric(
-        "Chiều cao tính toán",
+        "Calculated Height",
         f"{final_height:.3f} mm"
     )
 
 
-# Scale geometry theo chiều rộng mục tiêu
+# Thay đổi tỷ lệ geometry theo chiều rộng mục tiêu (Scale geometry to target width)
 
 if current_width > 0:
 
@@ -1610,15 +1610,15 @@ final_geometry = scale_geometry(
 
 
 # ============================================================
-# GỐC TỌA ĐỘ PHÔI / MÁY (WORK ZERO)
+# GỐC TỌA ĐỘ MÁY (WORK ZERO)
 # ============================================================
 
 st.subheader(
-    "5️⃣ Gốc tọa độ máy / Phôi (Work Zero)"
+    "5️⃣ Work Zero / Origin"
 )
 
 work_zero = st.selectbox(
-    "Gốc tọa độ gia công",
+    "Machine Work Zero",
     [
         "Bottom Left",
         "Bottom Center",
@@ -1644,24 +1644,24 @@ z1, z2 = st.columns(2)
 with z1:
 
     st.metric(
-        "Kích thước X cuối",
+        "Final X Size",
         f"{final_width:.3f} mm"
     )
 
 with z2:
 
     st.metric(
-        "Kích thước Y cuối",
+        "Final Y Size",
         f"{final_height:.3f} mm"
     )
 
 
 # ============================================================
-# THÔNG SỐ CAM (CAM PARAMETERS)
+# THÔNG SỐ CẮT CAM (CAM PARAMETERS)
 # ============================================================
 
 st.subheader(
-    "6️⃣ Thông số gia công CAM"
+    "6️⃣ CAM Parameters"
 )
 
 cam1, cam2, cam3 = st.columns(3)
@@ -1669,14 +1669,14 @@ cam1, cam2, cam3 = st.columns(3)
 with cam1:
 
     material_thickness = st.number_input(
-        "Độ dày vật liệu (mm)",
+        "Material Thickness (mm)",
         min_value=0.01,
         value=3.0,
         step=0.1
     )
 
     cut_z = st.number_input(
-        "Độ sâu cắt Cut Z (mm)",
+        "Cut Z (mm)",
         value=-3.2,
         step=0.1
     )
@@ -1684,14 +1684,14 @@ with cam1:
 with cam2:
 
     safe_z = st.number_input(
-        "Độ cao an toàn Safe Z (mm)",
+        "Safe Z (mm)",
         min_value=0.1,
         value=5.0,
         step=0.5
     )
 
     feed_rate = st.number_input(
-        "Tốc độ cắt Feed Rate (mm/phút)",
+        "Feed Rate (mm/min)",
         min_value=1,
         value=800,
         step=50
@@ -1700,7 +1700,7 @@ with cam2:
 with cam3:
 
     plunge_rate = st.number_input(
-        "Tốc độ đâm dao Plunge Rate (mm/phút)",
+        "Plunge Rate (mm/min)",
         min_value=1,
         value=300,
         step=10
