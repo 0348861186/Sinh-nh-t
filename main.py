@@ -9,8 +9,6 @@ from google.genai import types
 import numpy as np
 from PIL import Image
 from pydantic import BaseModel, Field
-from shapely.geometry import LineString, MultiPolygon, Polygon
-from shapely.ops import unary_union
 import streamlit as st
 
 
@@ -27,7 +25,7 @@ class DrawingDimensions(BaseModel):
 
 
 def extract_dimensions_with_gemini(image_bytes, api_key):
-    """Sử dụng Gemini AI để đọc thông số kích thước từ ghi chú trên ảnh."""
+    """Đọc kích thước từ ghi chú trên ảnh bằng Gemini AI."""
     try:
         client = genai.Client(api_key=api_key)
         img = Image.open(io.BytesIO(image_bytes))
@@ -60,100 +58,85 @@ def extract_dimensions_with_gemini(image_bytes, api_key):
 
 
 # ==============================================================================
-# 2. XỬ LÝ HÌNH HỌC CAD: ÉP NẾT 70MM SẠCH SẼ (KHÔNG LỖI VÒNG TRÒN ĐÈ NHAU)
+# 2. XỬ LÝ TRÍCH XUẤT VECTOR HOA VĂN CHUẨN DÁNG NGUYÊN BẢN 100%
 # ==============================================================================
-def process_pattern_exact_70mm(
-    image_bytes, target_w_mm=810.0, target_h_mm=2280.0, stroke_width_mm=70.0
+def process_pattern_exact_original(
+    image_bytes, target_w_mm=810.0, target_h_mm=2280.0
 ):
-    """Trích xuất đường viền và sử dụng Hình học Shapely để tạo nét 70mm chuẩn CAD."""
+    """Trích xuất chính xác 100% đường viền hoa văn từ khối phôi màu nâu, không làm méo hay rách nét."""
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # 1. Binarize ảnh
+    # 1. Binarize (Tách phần phôi gỗ màu nâu ra khỏi nền trắng)
     _, thresh = cv2.threshold(
         gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
     )
 
-    # 2. Crop bỏ sạch chữ kích thước xung quanh bằng Bounding Box
-    contours_all, _ = cv2.findContours(
+    # 2. Loại bỏ hoàn toàn chữ kích thước & mũi tên ở viền ngoài bằng Bounding Box
+    contours_external, _ = cv2.findContours(
         thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
-    if not contours_all:
+    if not contours_external:
         return [], (thresh.shape[1], thresh.shape[0])
 
-    main_contour = max(contours_all, key=cv2.contourArea)
+    # Tìm khung gỗ lớn nhất
+    main_contour = max(contours_external, key=cv2.contourArea)
     x, y, w, h = cv2.boundingRect(main_contour)
+
+    # Crop riêng phần phôi hoa văn gỗ
     pattern_crop = thresh[y : y + h, x : x + w]
 
+    # Tính tỉ lệ quy đổi Pixel sang mm
     scale_x = target_w_mm / w
     scale_y = target_h_mm / h
 
-    # 3. Trích xuất các đường Contour ban đầu
-    contours, _ = cv2.findContours(
+    # 3. Trích xuất toàn bộ cấu trúc đường viền (Viền khung ngoài + Các lỗ trống hoa văn)
+    # RETR_TREE giúp giữ nguyên phân cấp lòng trong / lòng ngoài chuẩn xác
+    contours, hierarchy = cv2.findContours(
         pattern_crop, cv2.RETR_TREE, cv2.CHAIN_APPROX_TC89_KCOS
     )
 
-    lines_shapely = []
-    half_stroke = stroke_width_mm / 2.0  # Lấy 35mm mỗi bên
-
-    for cnt in contours:
-        if cv2.contourArea(cnt) < 20:
-            continue
-
-        epsilon = 0.0015 * cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, epsilon, True)
-
-        pts = []
-        for p in approx:
-            px, py = p[0][0], p[0][1]
-            # Đảo trục Y cho CAD
-            pts.append((px * scale_x, (h - py) * scale_y))
-
-        if len(pts) > 2:
-            pts.append(pts[0])
-            line = LineString(pts)
-            # Dùng join_style=2 (mitre) để KHÔNG TẠO BỌC TRÒN
-            buffered = line.buffer(
-                half_stroke, cap_style=2, join_style=2, mitre_limit=2.0
-            )
-            if buffered.is_valid and not buffered.is_empty:
-                lines_shapely.append(buffered)
-
-    # 4. HỢP NHẤT HÌNH HỌC (UNARY UNION) - Triệt tiêu hoàn toàn các nét đè chồng
-    unified_geometry = unary_union(lines_shapely)
-
     pattern_polygons = []
+    if hierarchy is not None:
+        for i, cnt in enumerate(contours):
+            # Bỏ qua các vết chấm nhiễu rác nhỏ
+            if cv2.contourArea(cnt) < 40:
+                continue
 
-    def extract_coords(geom):
-        if isinstance(geom, Polygon):
-            pattern_polygons.append(list(geom.exterior.coords))
-            for interior in geom.interiors:
-                pattern_polygons.append(list(interior.coords))
-        elif isinstance(geom, MultiPolygon):
-            for poly in geom.geoms:
-                extract_coords(poly)
+            # Làm mượt đường cong hoa văn mượt mà
+            epsilon = 0.001 * cv2.arcLength(cnt, True)
+            approx = cv2.approxPolyDP(cnt, epsilon, True)
 
-    extract_coords(unified_geometry)
+            pts = []
+            for p in approx:
+                px, py = p[0][0], p[0][1]
+                # Chuyển sang mm thực tế & Đảo trục Y cho AutoCAD
+                pts.append((px * scale_x, (h - py) * scale_y))
+
+            if len(pts) > 2:
+                pts.append(pts[0])  # Khép kín đường polyline
+                pattern_polygons.append(pts)
 
     return pattern_polygons, (w, h)
 
 
 # ==============================================================================
-# 3. XUẤT FILE DXF CHUẨN CẮT CNC
+# 3. XUẤT FILE DXF CẮT CNC
 # ==============================================================================
 def create_dxf_file(pattern_polygons):
-    """Xuất file DXF chứa đường cắt hoa văn đã hợp nhất chuẩn nét."""
+    """Xuất file DXF chứa toàn bộ đường nét cắt chuẩn."""
     doc = ezdxf.new("R2010")
     msp = doc.modelspace()
 
-    doc.layers.add(name="HOA_VAN_70MM", color=1)  # Layer màu đỏ
+    # Tạo Layer chuẩn đỏ
+    doc.layers.add(name="CAT_CNC_HOA_VAN", color=1)
 
     for poly in pattern_polygons:
-        msp.add_lwpolyline(poly, dxfattribs={"layer": "HOA_VAN_70MM"})
+        msp.add_lwpolyline(poly, dxfattribs={"layer": "CAT_CNC_HOA_VAN"})
 
     tmp_dir = tempfile.mkdtemp()
-    filepath = os.path.join(tmp_dir, "Hoa_Van_Fix_70mm.dxf")
+    filepath = os.path.join(tmp_dir, "Hoa_Van_Chuan_CNC.dxf")
     doc.saveas(filepath)
 
     with open(filepath, "rb") as f:
@@ -163,19 +146,15 @@ def create_dxf_file(pattern_polygons):
 
 
 # ==============================================================================
-# 4. GIAO DIỆN WEB STREAMLIT
+# 4. GIAO DIỆN STREAMLIT WEB
 # ==============================================================================
 st.set_page_config(
     page_title="Auto CAD Vectorizer & Gemini OCR", layout="wide"
 )
-st.title("🌺 Hybrid AI Engine: Ép Chuẩn Nét 70mm (Thuật Toán Shapely Union)")
+st.title("🌺 Hybrid AI Engine: Trích Xuất Vector Hoa Văn CNC Nguyên Bản")
 
 st.sidebar.header("⚙️ Cấu hình Hệ thống")
 api_key = st.sidebar.text_input("Nhập Gemini API Key:", type="password")
-
-fixed_stroke = st.sidebar.number_input(
-    "Độ rộng nét hoa văn (mm):", value=70.0, step=5.0
-)
 
 if "width_mm" not in st.session_state:
     st.session_state.width_mm = 810.0
@@ -195,6 +174,7 @@ if uploaded_file:
         st.subheader("🖼️ Ảnh Gốc Upload")
         st.image(img_bytes, use_container_width=True)
 
+        # NÚT 1: Gemini AI đọc kích thước
         if st.button("🤖 NÚT AI: Đọc Kích Thước Bản Vẽ (Gemini OCR)"):
             if not api_key:
                 st.error("Vui lòng nhập Gemini API Key ở Sidebar!")
@@ -208,7 +188,7 @@ if uploaded_file:
                     )
 
     with col2:
-        st.subheader("📐 Bảng Điều Chỉnh & Xuất DXF")
+        st.subheader("📐 Thông Số Phôi & Xuất DXF")
 
         st.session_state.width_mm = st.number_input(
             "Chiều rộng phôi (mm):", value=st.session_state.width_mm
@@ -219,24 +199,24 @@ if uploaded_file:
 
         st.markdown("---")
 
-        if st.button("⚙️ NÚT CAD: Hợp Nhất Shape & Xuất DXF 70mm"):
-            with st.spinner(
-                f"Đang tính toán hợp nhất hình học nét {fixed_stroke}mm..."
-            ):
-                pattern_polygons, (w_px, h_px) = process_pattern_exact_70mm(
+        # NÚT 2: Xuất DXF Vector
+        if st.button("⚙️ NÚT CAD: Trích Xuất Vector & Tải File DXF"):
+            with st.spinner("Đang trích xuất vector dáng gốc chuẩn xác..."):
+                pattern_polygons, (w_px, h_px) = process_pattern_exact_original(
                     img_bytes,
                     st.session_state.width_mm,
                     st.session_state.height_mm,
-                    stroke_width_mm=fixed_stroke,
                 )
 
                 dxf_bytes = create_dxf_file(pattern_polygons)
 
-            st.success("✅ Đã xử lý hợp nhất hình học thành công!")
+            st.success(
+                f"✅ Đã tạo thành công **{len(pattern_polygons)}** đường cắt vector trùng khớp ảnh gốc!"
+            )
 
             st.download_button(
-                label="💾 TẢI FILE DXF CẮT CNC (SẠCH NẾT 70MM)",
+                label="💾 TẢI FILE DXF CẮT CNC (CHUẨN DÁNG GỐC)",
                 data=dxf_bytes,
-                file_name=f"Hoa_Van_Clean_{int(fixed_stroke)}mm.dxf",
+                file_name="Hoa_Van_CNC_ChuanNhat.dxf",
                 mime="application/dxf",
             )
