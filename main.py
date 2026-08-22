@@ -20,65 +20,79 @@ if not api_key:
 
 # Cấu hình Gemini
 genai.configure(api_key=api_key)
-model_text = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 # -----------------------------------------------------------------------------
-# HÀM DỊCH EXCEL
+# 1. XỬ LÝ DỊCH EXCEL (GOM BATCH TRÁNH LỖI QUOTA)
 # -----------------------------------------------------------------------------
-def translate_text_bilingual(text):
-    """Dịch câu/đoạn văn bản sang dạng: Tiếng Trung ở trên \n Tiếng Việt ở dưới"""
-    if not text or not isinstance(text, str) or text.strip().isdigit():
-        return text
-    if text.startswith('='):  # Bỏ qua công thức Excel
-        return text
-
-    prompt = f"""Bạn là một dịch thuật viên công xưởng chuyên nghiệp Trung - Việt.
-Hãy chuyển đổi đoạn văn bản sau thành dạng song ngữ chính xác:
-Dòng 1: Tiếng Trung (viết nguyên gốc hoặc dịch sang Tiếng Trung nếu đang là tiếng Việt)
-Dòng 2: Tiếng Việt (dịch chuẩn ngữ cảnh công xưởng)
-
-Quy tắc bắt buộc: Chỉ trả về 2 dòng chữ, dòng trên Tiếng Trung, dòng dưới Tiếng Việt. Không thêm bất kỳ lời giải thích nào khác.
-
-Văn bản:
-{text}"""
-
-    try:
-        response = model_text.generate_content(prompt)
-        res_text = response.text.strip()
-        return res_text
-    except Exception as e:
-        return text
-
 def process_excel(uploaded_file):
     wb = openpyxl.load_workbook(uploaded_file)
+    cells_to_translate = []
+    texts_to_translate = []
+
+    # Quét gom toàn bộ văn bản cần dịch trong các sheet
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
         for row in ws.iter_rows():
             for cell in row:
-                if cell.value and isinstance(cell.value, str):
-                    cell.value = translate_text_bilingual(cell.value)
-                    
-                    # Căn lề và bật Wrap Text để hiển thị 2 dòng
-                    align = cell.alignment
-                    if align:
-                        cell.alignment = Alignment(
-                            horizontal=align.horizontal,
-                            vertical=align.vertical,
-                            wrap_text=True
-                        )
-                    else:
-                        cell.alignment = Alignment(wrap_text=True)
-    
+                val = str(cell.value).strip() if cell.value else ""
+                if val and isinstance(cell.value, str) and not val.startswith('=') and not val.isdigit():
+                    cells_to_translate.append(cell)
+                    texts_to_translate.append(val)
+
+    if not texts_to_translate:
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        return output
+
+    # Gửi 1 LẦN duy nhất toàn bộ danh sách câu để tiết kiệm API
+    prompt = f"""Bạn là biên dịch viên công xưởng chuyên nghiệp. 
+Hãy dịch từng câu trong danh sách JSON dưới đây sang dạng song ngữ: Dòng 1 Tiếng Trung, Dòng 2 Tiếng Việt.
+Giữ nguyên thứ tự danh sách.
+
+Yêu cầu output: Trả về duy nhất 1 danh sách chuỗi JSON (JSON array of strings).
+
+Danh sách cần dịch:
+{json.dumps(texts_to_translate, ensure_ascii=False)}"""
+
+    try:
+        response = model.generate_content(prompt)
+        res_text = response.text.strip()
+        if "```json" in res_text:
+            res_text = res_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in res_text:
+            res_text = res_text.split("```")[1].split("```")[0].strip()
+            
+        translated_list = json.loads(res_text)
+
+        # Gán lại kết quả dịch vào từng ô Excel
+        for idx, cell in enumerate(cells_to_translate):
+            if idx < len(translated_list):
+                cell.value = translated_list[idx]
+                
+                # Bật Wrap Text cho ô
+                align = cell.alignment
+                if align:
+                    cell.alignment = Alignment(
+                        horizontal=align.horizontal,
+                        vertical=align.vertical,
+                        wrap_text=True
+                    )
+                else:
+                    cell.alignment = Alignment(wrap_text=True)
+    except Exception as e:
+        st.error(f"Lỗi khi dịch Excel qua Gemini: {str(e)}")
+
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
     return output
 
 # -----------------------------------------------------------------------------
-# HÀM DỊCH VÀ ĐÈ CHỮ LÊN ẢNH (Bảo toàn bố cục y chang)
+# 2. XỬ LÝ DỊCH VÀ ĐÈ CHỮ LÊN ẢNH
 # -----------------------------------------------------------------------------
 def process_image(pil_image):
-    # Dùng Gemini Vision nhận diện chữ, vị trí (bounding box) và dịch song ngữ
     prompt = """Hãy phân tích bức ảnh này. Nhận diện toàn bộ các vùng có chữ.
 Đối với mỗi vùng chữ, hãy:
 1. Xác định tọa độ hộp chứa chữ dạng tỷ lệ [ymin, xmin, ymax, xmax] từ 0 đến 1000.
@@ -90,10 +104,9 @@ Trả về kết quả duy nhất ở dạng cấu trúc JSON danh sách như sa
 ]
 """
     try:
-        response = model_text.generate_content([pil_image, prompt])
+        response = model.generate_content([pil_image, prompt])
         res_text = response.text.strip()
         
-        # Làm sạch chuỗi json trả về từ Gemini
         if "```json" in res_text:
             res_text = res_text.split("```json")[1].split("```")[0].strip()
         elif "```" in res_text:
@@ -104,7 +117,6 @@ Trả về kết quả duy nhất ở dạng cấu trúc JSON danh sách như sa
         st.error(f"Không thể phân tích ảnh bằng Gemini: {str(e)}")
         return pil_image
 
-    # Tạo bản sao ảnh để vẽ lại chữ mới đè lên vị trí cũ
     img_draw = pil_image.copy()
     draw = ImageDraw.Draw(img_draw)
     width, height = pil_image.size
@@ -115,22 +127,21 @@ Trả về kết quả duy nhất ở dạng cấu trúc JSON danh sách như sa
         if not box or not text:
             continue
             
-        # Quy đổi tọa độ 0-1000 ra pixel thực tế trên ảnh
         ymin, xmin, ymax, xmax = box
         left = int(xmin * width / 1000)
         top = int(ymin * height / 1000)
         right = int(xmax * width / 1000)
         bottom = int(ymax * height / 1000)
 
-        # 1. Xóa chữ cũ bằng cách vẽ hình chữ nhật màu trắng đè lên vùng chữ cũ
+        # Xóa chữ cũ bằng khối trắng
         draw.rectangle([left, top, right, bottom], fill="white", outline="white")
 
-        # 2. Cấu hình Font chữ và vẽ chữ Song ngữ mới vào đúng vị trí
         box_height = max(10, bottom - top)
         font_size = max(10, int(box_height / 3))
+        
+        # Sửa lỗi font trên Streamlit Cloud Linux
         try:
-            # Dùng font mặc định hỗ trợ Unicode
-            font = ImageFont.truetype("arial.ttf", font_size)
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
         except:
             font = ImageFont.load_default()
 
@@ -163,7 +174,6 @@ if uploaded_file is not None:
             # --- Trường hợp 2: File Ảnh hoặc PDF ---
             else:
                 if file_ext == "pdf":
-                    # Đọc trang đầu tiên của file PDF thành Ảnh
                     doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
                     page = doc.load_page(0)
                     pix = page.get_pixmap()
@@ -171,17 +181,15 @@ if uploaded_file is not None:
                 else:
                     input_image = Image.open(uploaded_file)
                 
-                # Xử lý dịch và đè chữ lên ảnh
                 output_image = process_image(input_image)
                 
                 st.success("🎉 Dịch thành công file Ảnh/PDF!")
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.image(input_image, caption="File Gốc", use_column_width=True)
+                    st.image(input_image, caption="File Gốc", use_container_width=True)
                 with col2:
-                    st.image(output_image, caption="File Dịch Song Ngữ (Y Chang Vị Trí Gốc)", use_column_width=True)
+                    st.image(output_image, caption="File Dịch Song Ngữ (Y Chang Vị Trí Gốc)", use_container_width=True)
                 
-                # Chuẩn bị nút tải ảnh về
                 img_byte_arr = io.BytesIO()
                 output_image.save(img_byte_arr, format='PNG')
                 img_byte_arr = img_byte_arr.getvalue()
