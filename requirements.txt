@@ -1,7 +1,5 @@
-streamlit
-ezdxf
-opencv-python-headless
-numpy
-Pillow
-google-genai
-matplotlib
+streamlit==1.31.0
+openpyxl==3.1.2
+google-generativeai==0.8.3
+Pillow==10.2.0
+PyMuPDF==1.23.22
