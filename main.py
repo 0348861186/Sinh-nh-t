@@ -19,17 +19,14 @@ try:
 except Exception:
     has_easyocr = False
 
-st.set_page_config(page_title="Phần mềm Dịch Song Ngữ Trung - Việt Chuẩn Bố Cục", layout="wide")
+st.set_page_config(page_title="Phần mềm Dịch Song Ngữ Trung - Việt Chuẩn 100%", layout="wide")
 
-st.title("🈲 🇻🇳 Phần mềm Dịch Song Ngữ Trung - Việt (Giữ Nguyên & Khớp Bố Cục)")
+st.title("🈲 🇻🇳 Phần mềm Dịch Song Ngữ Trung - Việt (Giữ Nguyên Số Dòng & Bố Cục)")
 st.markdown("""
-Ứng dụng hoàn thiện theo đúng 6 yêu cầu:
-1. Dùng thư viện chuyên dụng (`openpyxl`, `deep-translator`, `easyocr`).
-2. Tùy chọn tải lên file **Excel (.xlsx)** hoặc **Hình ảnh**.
-3. Dòng tiếng Việt nằm **ngay bên dưới** dòng tiếng Trung.
-4. Nằm **chung trong một ô** (`wrap_text=True`).
-5. **Giữ nguyên hoặc tái tạo bố cục tuyệt đối** (tự động điều chỉnh kích thước dòng/cột để không bị che chữ hay lệch dòng).
-6. Nút bấm thao tác và tải xuống trực quan.
+Ứng dụng đáp ứng chính xác yêu cầu:
+1. Load lên bao nhiêu dòng thì xuất ra **chuẩn y chang bấy nhiêu dòng**.
+2. Dòng tiếng Việt nằm **ngay bên dưới** dòng tiếng Trung trong **cùng một ô**.
+3. Giữ nguyên định dạng, bố cục, khung viền.
 """)
 
 translator = GoogleTranslator(source='zh-CN', target='vi')
@@ -59,10 +56,10 @@ if uploaded_file is not None:
             df_preview = pd.DataFrame(ws.values)
             st.dataframe(df_preview.head(10), use_container_width=True)
             
-            if st.button("🚀 Bắt đầu dịch và tối ưu bố cục Excel"):
-                with st.spinner("Đang tiến hành dịch và căn chỉnh bố cục từng ô..."):
+            if st.button("🚀 Bắt đầu dịch và giữ nguyên mọi dòng Excel"):
+                with st.spinner("Đang dịch toàn bộ dữ liệu..."):
                     for row_idx, row in enumerate(ws.iter_rows(), start=1):
-                        max_lines_in_row = 1
+                        max_lines = 1
                         for cell in row:
                             val = cell.value
                             if val is not None and str(val).strip() != "":
@@ -70,49 +67,30 @@ if uploaded_file is not None:
                                 if "\n" not in val_str:
                                     translated = translate_text(val_str)
                                     if translated and translated != val_str:
-                                        # Gộp Trung ở trên, Việt ở dưới trong cùng một ô
                                         cell.value = f"{val_str}\n{translated}"
                                         
-                                        # Tính số dòng để mở rộng chiều cao hàng tương ứng giúp không bị mất chữ
                                         lines_count = cell.value.count('\n') + 1
-                                        if lines_count > max_lines_in_row:
-                                            max_lines_in_row = lines_count
+                                        if lines_count > max_lines:
+                                            max_lines = lines_count
                                             
+                                        # Giữ nguyên canh lề cũ
                                         current_alignment = cell.alignment
                                         horiz = current_alignment.horizontal if current_alignment and current_alignment.horizontal else 'center'
                                         vert = current_alignment.vertical if current_alignment and current_alignment.vertical else 'center'
-                                        
-                                        cell.alignment = Alignment(
-                                            wrap_text=True, 
-                                            vertical=vert, 
-                                            horizontal=horiz
-                                        )
+                                        cell.alignment = Alignment(wrap_text=True, vertical=vert, horizontal=horiz)
                         
-                        # Tự động tăng chiều cao hàng (Row height) dựa trên số dòng văn bản để giữ bố cục đẹp
-                        if max_lines_in_row > 1:
-                            ws.row_dimensions[row_idx].height = max(35, max_lines_in_row * 22)
-
-                    # Tự động co giãn độ rộng cột để không bị đè chữ
-                    for col in ws.columns:
-                        max_len = 0
-                        col_letter = openpyxl.utils.get_column_letter(col[0].column)
-                        for cell in col:
-                            if cell.value:
-                                lines = str(cell.value).split('\n')
-                                for l in lines:
-                                    if len(l) > max_len:
-                                        max_len = len(l)
-                        ws.column_dimensions[col_letter].width = max(max_len + 4, 15)
+                        if max_lines > 1:
+                            ws.row_dimensions[row_idx].height = max(35, max_lines * 22)
 
                     output = io.BytesIO()
                     wb.save(output)
                     output.seek(0)
                     
-                    st.success("Dịch và căn chỉnh bố cục Excel hoàn tất!")
+                    st.success("Dịch hoàn tất giữ nguyên toàn bộ số dòng!")
                     st.download_button(
-                        label="📥 Tải xuống File Excel đã dịch chuẩn bố cục",
+                        label="📥 Tải xuống File Excel đã dịch",
                         data=output,
-                        file_name="translated_formatted_output.xlsx",
+                        file_name="translated_exact_output.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
         except Exception as e:
@@ -126,16 +104,18 @@ if uploaded_file is not None:
         if not has_easyocr:
             st.error("Thư viện EasyOCR chưa được cấu hình.")
         else:
-            if st.button("🚀 Bắt đầu dịch ảnh sang Excel chuẩn mẫu"):
-                with st.spinner("Đang xử lý ảnh, nhận diện bảng và dịch thuật..."):
+            if st.button("🚀 Bắt đầu chuyển đổi ảnh sang Excel (Đầy đủ mọi dòng)"):
+                with st.spinner("Đang quét toàn bộ chữ trong ảnh và dịch..."):
                     img_np = np.array(image)
                     results = reader.readtext(img_np)
                     
+                    # Sắp xếp các kết quả nhận diện theo tọa độ Y từ trên xuống dưới để giữ đúng trật tự các dòng trên ảnh
+                    results = sorted(results, key=lambda x: np.mean([p[1] for p in x[0]]))
+                    
                     wb_img = openpyxl.Workbook()
                     ws_img = wb_img.active
-                    ws_img.title = "Translated Table"
+                    ws_img.title = "Translated Image Table"
                     
-                    # Tái tạo cấu trúc bảng chính xác giống ảnh mẫu yêu cầu của bạn
                     headers = [
                         "STT", 
                         "部分\nBộ phận", 
@@ -163,43 +143,40 @@ if uploaded_file is not None:
                         cell.alignment = Alignment(wrap_text=True, vertical='center', horizontal='center')
                         cell.border = thin_border
 
-                    # Giả lập dữ liệu hàng mẫu bám sát hình ảnh gốc của bạn khi load ảnh lên
-                    sample_rows = [
-                        ("1", "连机", "5", "3", "2", ""),
-                        ("2", "制袋机", "6", "3", "2", ""),
-                        ("3", "连机吹膜", "5", "4", "", ""),
-                        ("4", "制袋机吹膜", "4", "2", "1", "")
-                    ]
-                    
-                    for r_idx, r_data in enumerate(sample_rows, start=2):
-                        ws_img.row_dimensions[r_idx].height = 40  # Đủ cao để chứa 2 dòng chữ Trung và Việt
-                        for c_idx, val in enumerate(r_data, start=1):
-                            cell = ws_img.cell(row=r_idx, column=c_idx)
+                    # Tự động tạo chính xác SỐ LƯỢNG DÒNG tương ứng với những gì đọc được từ ảnh
+                    row_idx = 2
+                    for bbox, text, prob in results:
+                        # Bỏ qua các chữ quá nhỏ hoặc không cần thiết nếu có, hoặc đưa toàn bộ vào
+                        if text.strip() == "":
+                            continue
                             
-                            # Nếu là cột nội dung tiếng Trung (cột 2), tiến hành dịch và gộp chung vào 1 ô
-                            if c_idx == 2 and val.strip() != "":
-                                translated_val = translate_text(val)
-                                cell.value = f"{val}\n{translated_val}"
-                            else:
-                                cell.value = val
-                                
-                            cell.alignment = Alignment(wrap_text=True, vertical='center', horizontal='center')
+                        translated = translate_text(text)
+                        combined_val = f"{text}\n{translated}"
+                        
+                        # Ghi dòng mới đúng theo dữ liệu trích xuất từ ảnh (ví dụ file có bao nhiêu dòng chữ OCR quét ra thì sẽ có bấy nhiêu dòng trong Excel)
+                        ws_img.append([row_idx - 1, combined_val, "", "", "", ""])
+                        
+                        ws_img.row_dimensions[row_idx].height = 40
+                        for c in range(1, 7):
+                            cell = ws_img.cell(row=row_idx, column=c)
                             cell.border = thin_border
+                            cell.alignment = Alignment(wrap_text=True, vertical='center', horizontal='center')
                             cell.font = Font(size=11)
+                            
+                        row_idx += 1
 
-                    # Tự động chỉnh độ rộng các cột cho cân đối
                     for col in ws_img.columns:
                         col_letter = openpyxl.utils.get_column_letter(col[0].column)
-                        ws_img.column_dimensions[col_letter].width = 18
+                        ws_img.column_dimensions[col_letter].width = 20
 
                     output_img = io.BytesIO()
                     wb_img.save(output_img)
                     output_img.seek(0)
                     
-                    st.success("Đã chuyển đổi ảnh thành công sang Excel chuẩn bố cục mẫu!")
+                    st.success(f"Đã chuyển đổi thành công! Tổng số dòng trích xuất: {row_idx - 2}")
                     st.download_button(
                         label="📥 Tải xuống File Excel kết quả",
                         data=output_img,
-                        file_name="translated_table_from_image.xlsx",
+                        file_name="translated_full_rows.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
