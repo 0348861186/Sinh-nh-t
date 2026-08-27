@@ -131,7 +131,6 @@ if uploaded_file is not None:
                     # Lưu file Excel kết quả từ ảnh
                     output_img = io.BytesIO()
                     wb_img.save(output_img)
-                    output_img.seek(0.0 if hasattr(output_img, 'seek') else None)
                     output_img.seek(0)
                     
                     st.success("Đã chuyển đổi và dịch ảnh thành công sang Excel!")
