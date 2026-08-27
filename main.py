@@ -25,8 +25,8 @@ st.caption("Hỗ trợ chọn chế độ Trung ➔ Việt hoặc Việt ➔ Tru
 # Cache Reader EasyOCR để tránh load lại model nhiều lần gây chậm
 @st.cache_resource
 def get_ocr_reader():
-    # Load model OCR hỗ trợ tiếng Trung (zh), tiếng Việt (vi) và tiếng Anh (en)
-    return easyocr.Reader(['zh', 'vi', 'en'], gpu=False)
+    # Sử dụng 'ch_sim' (Tiếng Trung Giản Thể) và 'en' (Tiếng Anh/Latinh) để tránh lỗi 'zh is not supported'
+    return easyocr.Reader(['ch_sim', 'en'], gpu=False)
 
 # ============================================================
 # 1. BỘ LỌC HƯỚNG DỊCH & TẢI FILE
@@ -91,7 +91,9 @@ def process_image_or_pdf_to_data(file_bytes, file_type, mode):
     """
     reader = get_ocr_reader()
     
+    # Đọc ảnh từ Bytes
     image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+    
     # Quét chữ từ ảnh
     results = reader.readtext(file_bytes, detail=0)
     
@@ -122,7 +124,7 @@ def process_image_or_pdf_to_data(file_bytes, file_type, mode):
     dept_lines = [l for l in extracted_lines[1:] if not re.search(r'^\d+$', l)]
     
     for idx, line in enumerate(dept_lines, start=1):
-        if idx > 15: # Giới hạn tối đa dòng mẫu
+        if idx > 15: # Giới hạn tối đa 15 dòng mẫu
             break
         try:
             trans_line = translator.translate(line)
