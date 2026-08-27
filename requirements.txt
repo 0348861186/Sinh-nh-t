@@ -1,7 +1,10 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision
 streamlit
 openpyxl
 deep-translator
-pytesseract
+easyocr
 Pillow
 pdf2image
 numpy
