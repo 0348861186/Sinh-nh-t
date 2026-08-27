@@ -353,8 +353,6 @@ def translate_text(text, mode):
     # Trung -> Việt
     if mode == "Trung ➔ Việt":
 
-        # Argos không cần gọi API.
-        # Nếu có cặp trực tiếp thì dùng trực tiếp.
         direct = find_argos_translation("zh", "vi")
 
         if direct is not None:
@@ -439,7 +437,6 @@ def preprocess_image(image):
     if image.mode != "RGB":
         image = image.convert("RGB")
 
-    # Phóng to ảnh nếu ảnh nhỏ
     width, height = image.size
 
     scale = 1
@@ -456,12 +453,10 @@ def preprocess_image(image):
             Image.Resampling.LANCZOS
         )
 
-    # Tăng contrast nhẹ
     image = ImageEnhance.Contrast(
         image
     ).enhance(1.25)
 
-    # Tăng sharpness
     image = ImageEnhance.Sharpness(
         image
     ).enhance(1.25)
@@ -481,12 +476,6 @@ def get_ocr():
             "Chưa cài PaddleOCR/PaddlePaddle."
         )
 
-    """
-    PP-OCRv5 multilingual.
-    Dùng lang=vi để ưu tiên tiếng Việt.
-    PaddleOCR vẫn nhận được nhiều ký tự Latin.
-    """
-
     try:
 
         ocr = PaddleOCR(
@@ -500,7 +489,6 @@ def get_ocr():
 
     except Exception:
 
-        # Fallback cho một số phiên bản PaddleOCR
         ocr = PaddleOCR(
             lang="vi"
         )
@@ -522,7 +510,6 @@ def parse_paddle_result(result):
 
             data = None
 
-            # PaddleOCR 3.x
             if hasattr(res, "json"):
 
                 try:
@@ -537,7 +524,6 @@ def parse_paddle_result(result):
                 except Exception:
                     data = None
 
-            # Trường hợp object có thuộc tính res
             if data is None and hasattr(res, "res"):
 
                 try:
@@ -761,16 +747,9 @@ def line_to_text(line):
 def extract_date(text):
 
     patterns = [
-
-        # YYYY-MM-DD
         r'(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})',
-
-        # DD-MM-YYYY
         r'(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})',
-
-        # YYYY年MM月DD日
         r'(\d{4})年(\d{1,2})月(\d{1,2})日',
-
     ]
 
     for pattern in patterns:
@@ -788,7 +767,6 @@ def extract_date(text):
 
                 if len(groups) == 3:
 
-                    # Nếu phần đầu là năm
                     if len(groups[0]) == 4:
 
                         year = int(groups[0])
@@ -826,7 +804,6 @@ def clean_number(text):
     text = text.replace("，", ".")
     text = text.replace("。", ".")
 
-    # Chỉ còn số, dấu chấm, dấu âm
     match = re.search(
         r'-?\d+(?:\.\d+)?',
         text
@@ -962,7 +939,6 @@ def parse_attendance_rows(
         if not line_text:
             continue
 
-        # Bỏ dòng tổng cộng
         if any(
             keyword in line_text.lower()
             for keyword in [
@@ -975,13 +951,12 @@ def parse_attendance_rows(
         ):
             continue
 
-        # Lấy STT
         stt = ""
 
         first_text = line[0]["text"]
 
         stt_match = re.match(
-            r'^\s*(\d+)[\.\、\)]?\s*$',
+            r'^\s*(\d+)[\.\\)]?\s*$',
             first_text
         )
 
@@ -990,7 +965,6 @@ def parse_attendance_rows(
                 stt_match.group(1)
             )
 
-        # Nếu không thấy STT thì thử toàn dòng
         if not stt:
 
             match = re.match(
@@ -1004,7 +978,6 @@ def parse_attendance_rows(
                 )
 
         if not stt:
-            # Có thể đã đến phần khác của tài liệu
             continue
 
         row = {
@@ -1082,8 +1055,6 @@ def parse_attendance_rows(
                 else:
                     row["remark"] = text
 
-        # Nếu OCR không xác định được cột,
-        # dùng fallback theo vị trí text.
         if not row["dept_src"]:
 
             candidate_texts = []
@@ -1182,7 +1153,6 @@ def parse_attendance_image(
         all_text
     )
 
-    # Lấy title phía trên header
     title_lines = []
 
     if header_index is not None:
@@ -1205,7 +1175,6 @@ def parse_attendance_image(
         header_index
     )
 
-    # Dịch title
     title_tgt = ""
 
     if title_src:
@@ -1218,7 +1187,6 @@ def parse_attendance_image(
         except Exception:
             title_tgt = ""
 
-    # Dịch department
     rows = translate_attendance_rows(
         rows,
         mode
@@ -1262,7 +1230,6 @@ def pdf_to_images(pdf_bytes):
                 page_index
             ]
 
-            # Zoom 2.5x để OCR rõ hơn
             matrix = fitz.Matrix(
                 2.5,
                 2.5
@@ -1350,7 +1317,6 @@ def merge_parsed_documents(
 
 # ============================================================
 # BUILD EXCEL TỪ JSON
-# GIỮ NGUYÊN LOGIC CODE GỐC
 # ============================================================
 
 def build_excel_from_json(
@@ -1419,10 +1385,7 @@ def build_excel_from_json(
         f"{bot_title} ngày {dt_str}"
     ).strip()
 
-    # --------------------------------------------------------
     # TITLE
-    # --------------------------------------------------------
-
     ws.merge_cells("A1:F1")
 
     ws["A1"] = full_title
@@ -1441,10 +1404,7 @@ def build_excel_from_json(
 
     ws.row_dimensions[1].height = 42
 
-    # --------------------------------------------------------
     # HEADER
-    # --------------------------------------------------------
-
     if mode == "Trung ➔ Việt":
 
         headers = [
@@ -1508,10 +1468,7 @@ def build_excel_from_json(
 
     ws.row_dimensions[2].height = 38
 
-    # --------------------------------------------------------
     # DATA
-    # --------------------------------------------------------
-
     current_row = 3
 
     total_workers = 0
@@ -1622,665 +1579,84 @@ def build_excel_from_json(
             value=rmk
         )
 
-        for col in range(1, 7):
-
-            c = ws.cell(
-                row=current_row,
-                column=col
-            )
-
-            c.font = Font(
-                name=font_name,
-                size=10
-            )
-
-            c.alignment = Alignment(
-                horizontal="center",
+        for col_idx in range(1, 7):
+            cell = ws.cell(row=current_row, column=col_idx)
+            cell.font = Font(name=font_name, size=10)
+            cell.alignment = Alignment(
+                horizontal="center" if col_idx in [1, 3, 4, 5] else "left",
                 vertical="center",
                 wrap_text=True
             )
+            cell.border = border
 
-            c.border = border
-
-        ws.row_dimensions[
-            current_row
-        ].height = 32
-
+        ws.row_dimensions[current_row].height = 32
         current_row += 1
 
-    # --------------------------------------------------------
-    # TOTAL
-    # --------------------------------------------------------
-
-    total_row = current_row
-
-    ws.merge_cells(
-        start_row=total_row,
-        start_column=1,
-        end_row=total_row,
-        end_column=2
-    )
-
-    if mode == "Trung ➔ Việt":
-
-        total_label = (
-            "一共\nTổng cộng"
-        )
-
-    else:
-
-        total_label = (
-            "Tổng cộng\n一共"
-        )
-
-    ws.cell(
-        row=total_row,
-        column=1,
-        value=total_label
-    )
-
-    ws.merge_cells(
-        start_row=total_row,
-        start_column=3,
-        end_row=total_row,
-        end_column=5
-    )
-
-    total_value = (
-        int(total_workers)
-        if (
-            isinstance(
-                total_workers,
-                float
-            )
-            and total_workers.is_integer()
-        )
-        else total_workers
-    )
-
-    ws.cell(
-        row=total_row,
-        column=3,
-        value=total_value
-    )
-
-    for col in range(1, 7):
-
-        c = ws.cell(
-            row=total_row,
-            column=col
-        )
-
-        c.font = Font(
-            name=font_name,
-            size=11,
-            bold=True
-        )
-
-        c.alignment = Alignment(
-            horizontal="center",
-            vertical="center",
-            wrap_text=True
-        )
-
-        c.border = border
-
-    ws.row_dimensions[
-        total_row
-    ].height = 36
-
-    # --------------------------------------------------------
-    # COLUMN WIDTH
-    # --------------------------------------------------------
-
-    ws.column_dimensions["A"].width = 8
-    ws.column_dimensions["B"].width = 24
-    ws.column_dimensions["C"].width = 14
-    ws.column_dimensions["D"].width = 17
-    ws.column_dimensions["E"].width = 17
-    ws.column_dimensions["F"].width = 18
-
-    out = io.BytesIO()
-
-    wb.save(out)
-
-    out.seek(0)
-
-    return out
-
-
-# ============================================================
-# KIỂM TRA FILE EXCEL
-# ============================================================
-
-def get_excel_texts(
-    wb,
-    translation_mode
-):
-
-    texts_to_translate = set()
-
-    for sheet in wb.worksheets:
-
-        for row in sheet.iter_rows():
-
-            for cell in row:
-
-                if not cell.value:
-                    continue
-
-                if not isinstance(
-                    cell.value,
-                    str
-                ):
-                    continue
-
-                val = cell.value.strip()
-
-                if not val:
-                    continue
-
-                # Bỏ công thức
-                if val.startswith("="):
-                    continue
-
-                if translation_mode == "Trung ➔ Việt":
-
-                    if has_chinese(val):
-                        texts_to_translate.add(
-                            val
-                        )
-
-                else:
-
-                    if (
-                        has_vietnamese(val)
-                        or not has_chinese(val)
-                    ):
-
-                        if (
-                            len(val) > 1
-                            and not val.isnumeric()
-                        ):
-
-                            texts_to_translate.add(
-                                val
-                            )
-
-    return list(
-        texts_to_translate
-    )
-
-
-# ============================================================
-# DỊCH EXCEL
-# ============================================================
-
-def translate_excel(
-    file_bytes,
-    translation_mode
-):
-
-    wb = openpyxl.load_workbook(
-        io.BytesIO(file_bytes)
-    )
-
-    texts = get_excel_texts(
-        wb,
-        translation_mode
-    )
-
-    if not texts:
-        return None, 0
-
-    translation_dict = translate_texts(
-        texts,
-        translation_mode
-    )
-
-    # --------------------------------------------------------
-    # CHÈN BẢN DỊCH
-    # GIỮ NGUYÊN LOGIC GỐC
-    # --------------------------------------------------------
-
-    for sheet in wb.worksheets:
-
-        for row in sheet.iter_rows():
-
-            for cell in row:
-
-                if not cell.value:
-                    continue
-
-                if not isinstance(
-                    cell.value,
-                    str
-                ):
-                    continue
-
-                orig = cell.value.strip()
-
-                trans = translation_dict.get(
-                    orig,
-                    ""
-                )
-
-                if not trans:
-                    continue
-
-                cell.value = (
-                    f"{orig}\n{trans}"
-                )
-
-                curr_align = cell.alignment
-
-                cell.alignment = Alignment(
-                    horizontal=(
-                        curr_align.horizontal
-                        or "center"
-                    ),
-                    vertical=(
-                        curr_align.vertical
-                        or "center"
-                    ),
-                    wrap_text=True
-                )
+    column_widths = {
+        'A': 8,   # STT
+        'B': 30,  # Bộ phận
+        'C': 12,  # Số máy
+        'D': 12,  # Chính thức
+        'E': 12,  # Thời vụ
+        'F': 20   # Ghi chú
+    }
+    
+    for col_letter, width in column_widths.items():
+        ws.column_dimensions[col_letter].width = width
 
     output = io.BytesIO()
-
     wb.save(output)
-
     output.seek(0)
-
-    return output, len(texts)
+    return output
 
 
 # ============================================================
-# GIAO DIỆN
+# GIAO DIỆN CHÍNH STREAMLIT
 # ============================================================
 
-col1, col2 = st.columns(
-    [1.2, 2]
+mode = st.sidebar.selectbox(
+    "Chọn chế độ dịch",
+    ["Trung ➔ Việt", "Việt ➔ Trung"]
 )
 
-with col1:
-
-    translation_mode = st.radio(
-        "Chế độ dịch:",
-        options=[
-            "Trung ➔ Việt",
-            "Việt ➔ Trung"
-        ],
-        horizontal=True
-    )
-
-with col2:
-
-    uploaded_file = st.file_uploader(
-        "Tải lên Ảnh, PDF hoặc File Excel:",
-        type=[
-            "png",
-            "jpg",
-            "jpeg",
-            "pdf",
-            "xlsx"
-        ]
-    )
-
-
-# ============================================================
-# TRẠNG THÁI HỆ THỐNG
-# ============================================================
-
-with st.expander(
-    "⚙️ Kiểm tra bộ dịch local",
-    expanded=False
-):
-
-    st.write(
-        "Ứng dụng không sử dụng Gemini API. "
-        "Model dịch được chạy local bằng Argos Translate."
-    )
-
-    if st.button(
-        "🔧 Kiểm tra / tải model dịch"
-    ):
-
-        try:
-
-            with st.spinner(
-                "Đang kiểm tra model dịch..."
-            ):
-
-                status = (
-                    initialize_translation_models()
-                )
-
-            st.success(
-                "Đã sẵn sàng: "
-                + ", ".join(status)
-            )
-
-        except Exception as e:
-
-            st.error(
-                f"Không khởi tạo được model: {e}"
-            )
-
-
-# ============================================================
-# XỬ LÝ FILE
-# ============================================================
+uploaded_file = st.file_uploader(
+    "Tải lên tệp ảnh (PNG, JPG) hoặc PDF bảng chấm công",
+    type=["png", "jpg", "jpeg", "pdf"]
+)
 
 if uploaded_file is not None:
+    try:
+        with st.spinner("Đang khởi tạo hệ thống dịch..."):
+            initialize_translation_models()
 
-    extension = (
-        uploaded_file.name
-        .lower()
-        .split(".")[-1]
-    )
+        images = []
+        if uploaded_file.type == "application/pdf":
+            with st.spinner("Đang chuyển đổi PDF sang ảnh..."):
+                images = pdf_to_images(uploaded_file.getvalue())
+        else:
+            images = [Image.open(uploaded_file)]
 
-    is_excel = (
-        extension == "xlsx"
-    )
+        parsed_docs = []
+        for img in images:
+            with st.spinner("Đang chạy OCR và trích xuất dữ liệu..."):
+                parsed_docs.append(parse_attendance_image(img, mode))
 
-    if is_excel:
+        final_data = merge_parsed_documents(parsed_docs, mode)
 
-        button_label = (
-            f"🚀 Dịch ({translation_mode}) "
-            "& Bảo Toàn Format Excel"
+        st.success("Trích xuất và dịch thành công!")
+        
+        # Xem trước dữ liệu
+        st.subheader("Bản xem trước dữ liệu")
+        st.json(final_data)
+
+        # Xuất Excel
+        excel_data = build_excel_from_json(final_data, mode)
+        st.download_button(
+            label="📥 Tải xuống file Excel song ngữ",
+            data=excel_data,
+            file_name="bang_cham_cong_song_ngu.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-    else:
-
-        button_label = (
-            f"🚀 OCR Ảnh/PDF & Dịch "
-            f"({translation_mode})"
-        )
-
-    if st.button(
-        button_label,
-        use_container_width=True
-    ):
-
-        try:
-
-            # =================================================
-            # KHỞI ĐỘNG MODEL
-            # =================================================
-
-            with st.spinner(
-                "🔧 Đang kiểm tra bộ dịch local..."
-            ):
-
-                initialize_translation_models()
-
-            # =================================================
-            # TRƯỜNG HỢP 1: EXCEL
-            # =================================================
-
-            if is_excel:
-
-                with st.spinner(
-                    "1️⃣ Đang đọc các ô cần dịch..."
-                ):
-
-                    file_bytes = (
-                        uploaded_file.read()
-                    )
-
-                with st.spinner(
-                    f"2️⃣ Đang dịch "
-                    f"bằng model local "
-                    f"({translation_mode})..."
-                ):
-
-                    output, count = translate_excel(
-                        file_bytes,
-                        translation_mode
-                    )
-
-                if output is None:
-
-                    st.warning(
-                        "Không tìm thấy nội dung "
-                        "văn bản phù hợp với chế độ "
-                        "dịch đã chọn!"
-                    )
-
-                else:
-
-                    st.success(
-                        f"✅ Đã dịch thành công "
-                        f"{count} nội dung văn bản "
-                        f"bằng thư viện local."
-                    )
-
-                    st.download_button(
-                        label=(
-                            "⬇️ Tải File Excel Song Ngữ (.xlsx)"
-                        ),
-                        data=output.getvalue(),
-                        file_name=(
-                            f"Translated_"
-                            f"{uploaded_file.name}"
-                        ),
-                        mime=(
-                            "application/vnd.openxmlformats-"
-                            "officedocument.spreadsheetml.sheet"
-                        ),
-                        use_container_width=True
-                    )
-
-            # =================================================
-            # TRƯỜNG HỢP 2: ẢNH
-            # =================================================
-
-            elif extension in [
-                "png",
-                "jpg",
-                "jpeg"
-            ]:
-
-                with st.spinner(
-                    "1️⃣ PaddleOCR đang nhận diện ảnh..."
-                ):
-
-                    file_bytes = (
-                        uploaded_file.read()
-                    )
-
-                    image = Image.open(
-                        io.BytesIO(file_bytes)
-                    )
-
-                    parsed_data = (
-                        parse_attendance_image(
-                            image,
-                            translation_mode
-                        )
-                    )
-
-                with st.spinner(
-                    "2️⃣ Đang tạo Excel..."
-                ):
-
-                    excel_bytes = (
-                        build_excel_from_json(
-                            parsed_data,
-                            translation_mode
-                        )
-                    )
-
-                st.success(
-                    "✅ Đã OCR, dịch và tạo Excel thành công!"
-                )
-
-                st.download_button(
-                    label="⬇️ Tải File Excel (.xlsx)",
-                    data=excel_bytes.getvalue(),
-                    file_name=(
-                        f"Bang_cham_cong_"
-                        f"{parsed_data.get('date_str', 'export')}.xlsx"
-                    ),
-                    mime=(
-                        "application/vnd.openxmlformats-"
-                        "officedocument.spreadsheetml.sheet"
-                    ),
-                    use_container_width=True
-                )
-
-                # Hiển thị preview OCR
-                with st.expander(
-                    "🔎 Xem kết quả OCR"
-                ):
-
-                    st.json(
-                        parsed_data
-                    )
-
-            # =================================================
-            # TRƯỜNG HỢP 3: PDF
-            # =================================================
-
-            elif extension == "pdf":
-
-                if fitz is None:
-
-                    st.error(
-                        "Thiếu PyMuPDF. "
-                        "Hãy cài pymupdf."
-                    )
-
-                else:
-
-                    with st.spinner(
-                        "1️⃣ Đang chuyển PDF thành ảnh..."
-                    ):
-
-                        pdf_bytes = (
-                            uploaded_file.read()
-                        )
-
-                        pages = pdf_to_images(
-                            pdf_bytes
-                        )
-
-                    st.info(
-                        f"PDF có {len(pages)} trang."
-                    )
-
-                    documents = []
-
-                    progress = st.progress(
-                        0
-                    )
-
-                    for index, page_image in enumerate(
-                        pages,
-                        start=1
-                    ):
-
-                        st.write(
-                            f"📄 Đang OCR trang "
-                            f"{index}/{len(pages)}..."
-                        )
-
-                        try:
-
-                            document = (
-                                parse_attendance_image(
-                                    page_image,
-                                    translation_mode
-                                )
-                            )
-
-                            documents.append(
-                                document
-                            )
-
-                        except Exception as page_error:
-
-                            st.warning(
-                                f"⚠️ Trang {index} "
-                                f"không xử lý được: "
-                                f"{page_error}"
-                            )
-
-                        progress.progress(
-                            index / max(
-                                len(pages),
-                                1
-                            )
-                        )
-
-                    progress.empty()
-
-                    if not documents:
-
-                        st.error(
-                            "Không OCR được dữ liệu nào từ PDF."
-                        )
-
-                    else:
-
-                        with st.spinner(
-                            "2️⃣ Đang ghép dữ liệu các trang..."
-                        ):
-
-                            parsed_data = (
-                                merge_parsed_documents(
-                                    documents,
-                                    translation_mode
-                                )
-                            )
-
-                        with st.spinner(
-                            "3️⃣ Đang tạo Excel..."
-                        ):
-
-                            excel_bytes = (
-                                build_excel_from_json(
-                                    parsed_data,
-                                    translation_mode
-                                )
-                            )
-
-                        st.success(
-                            "✅ Đã OCR, dịch và chuyển PDF "
-                            "sang Excel thành công!"
-                        )
-
-                        st.download_button(
-                            label=(
-                                "⬇️ Tải File Excel (.xlsx)"
-                            ),
-                            data=(
-                                excel_bytes.getvalue()
-                            ),
-                            file_name=(
-                                f"Bang_cham_cong_"
-                                f"{parsed_data.get('date_str', 'export')}.xlsx"
-                            ),
-                            mime=(
-                                "application/vnd.openxmlformats-"
-                                "officedocument.spreadsheetml.sheet"
-                            ),
-                            use_container_width=True
-                        )
-
-                        with st.expander(
-                            "🔎 Xem dữ liệu OCR"
-                        ):
-
-                            st.json(
-                                parsed_data
-                            )
-
-        except Exception as e:
-
-            st.error(
-                "❌ Xảy ra lỗi trong quá trình xử lý:"
-            )
-
-            st.exception(e)
+    except Exception as e:
+        st.error(f"Đã xảy ra lỗi: {e}")
