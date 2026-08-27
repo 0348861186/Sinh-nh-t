@@ -94,7 +94,7 @@ if uploaded_file is not None:
     else:
         st.success("Đã tải lên hình ảnh thành công!")
         image = Image.open(uploaded_file)
-        st.image(image, caption="Ảnh gốc tải lên", use_column_width=True)
+        st.image(image, caption="Ảnh gốc tải lên", use_container_width=True)
         
         if not has_easyocr:
             st.error("Thư viện OCR chưa sẵn sàng trên môi trường này. Vui lòng đảm bảo easyocr được cài đặt trong requirements.txt")
