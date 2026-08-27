@@ -27,11 +27,10 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🤖 Dịch & Xuất Bảng Chấm Công Song Ngữ (Thư Viện Local / Free)")
-st.caption("Hỗ trợ chọn chế độ Trung ➔ Việt hoặc Việt ➔ Trung | Giữ nguyên 100% format Excel gốc hoặc chuyển từ Ảnh/PDF.")
+st.title("🤖 Dịch & Xuất Bảng Chấm Công Song Ngữ")
+st.caption("Hỗ trợ chọn chế độ Trung ➔ Việt hoặc Việt ➔ Trung | Dùng thư viện Local / Free.")
 
-# Cache Reader EasyOCR theo ngôn ngữ được chọn
-# EasyOCR yêu cầu: 'ch_sim' chỉ đi kèm được với 'en'
+# Cache Reader EasyOCR để tránh load lại model nhiều lần
 @st.cache_resource
 def get_ocr_reader(lang_mode):
     if lang_mode == "Trung ➔ Việt":
@@ -68,12 +67,9 @@ def has_vietnamese(text):
     return bool(re.search(vietnamese_pattern, text, re.IGNORECASE))
 
 # ============================================================
-# HÀM DỊCH THUẬT VĂN BẢN (DEEP_TRANSLATOR)
+# HÀM DỊCH THUẬT VĂN BẢN (THAY THẾ GEMINI BẰNG DEEP_TRANSLATOR)
 # ============================================================
 def translate_batch_local(text_list, mode):
-    """
-    Dịch danh sách các chuỗi văn bản sử dụng deep-translator (Google Translate Engine miễn phí)
-    """
     if not text_list:
         return {}
     
@@ -88,12 +84,12 @@ def translate_batch_local(text_list, mode):
             translated = translator.translate(text)
             translation_dict[text] = translated
         except Exception:
-            translation_dict[text] = text  # Giữ nguyên từ gốc nếu có lỗi dịch
+            translation_dict[text] = text
             
     return translation_dict
 
 # ============================================================
-# HÀM QUÉT OCR VÀ TẠO DỮ LIỆU JSON DỰ PHÒNG
+# HÀM BÓC TÁCH ẢNH/PDF THÀNH JSON (THAY THẾ GEMINI VISION)
 # ============================================================
 def process_image_or_pdf_to_json(file_bytes, file_type, mode):
     reader = get_ocr_reader(mode)
@@ -121,7 +117,7 @@ def process_image_or_pdf_to_json(file_bytes, file_type, mode):
     title_src = ""
     rows = []
 
-    # Tìm chuỗi ngày tháng dạng YYYY-MM-DD hoặc YYYY/MM/DD
+    # Tìm ngày tháng trong văn bản
     for line in raw_lines:
         date_match = re.search(r'\d{4}[-/.]\d{1,2}[-/.]\d{1,2}', line)
         if date_match:
@@ -152,6 +148,7 @@ def process_image_or_pdf_to_json(file_bytes, file_type, mode):
         })
         stt_count += 1
 
+    # Trả về đúng cấu trúc JSON mà code gốc của bạn yêu cầu
     return {
         "title_src": title_src,
         "title_tgt": title_tgt,
@@ -160,7 +157,7 @@ def process_image_or_pdf_to_json(file_bytes, file_type, mode):
     }
 
 # ============================================================
-# HÀM DỰNG FILE EXCEL TỪ JSON (GIỮ NGUYÊN LOGIC VÀ FORMAT GỐC)
+# HÀM TẠO EXCEL TỪ JSON (GIỮ NGUYÊN 100% CODE GỐC CỦA BẠN)
 # ============================================================
 def build_excel_from_json(data, mode):
     wb = Workbook()
@@ -258,7 +255,7 @@ def build_excel_from_json(data, mode):
     return out
 
 # ============================================================
-# 2. XỬ LÝ DỊCH CHÍNH
+# 2. LUỒNG XỬ LÝ CHÍNH (GIỮ NGUYÊN LOGIC GỐC)
 # ============================================================
 if uploaded_file is not None:
     is_excel = uploaded_file.name.lower().endswith('.xlsx')
@@ -266,7 +263,7 @@ if uploaded_file is not None:
 
     if st.button(button_label, use_container_width=True):
         try:
-            # TRƯỜNG HỢP 1: EXCEL FILE (.xlsx)
+            # LUỒNG EXCEL (.xlsx) - GIỮ NGUYÊN 100% LOGIC GỐC
             if is_excel:
                 with st.spinner(f"1️⃣ Đang quét các ô cần dịch theo chế độ [{translation_mode}]..."):
                     file_bytes = uploaded_file.read()
@@ -323,7 +320,7 @@ if uploaded_file is not None:
                             use_container_width=True
                         )
 
-            # TRƯỜNG HỢP 2: TẢI FILE ẢNH / PDF
+            # LUỒNG ẢNH / PDF
             else:
                 with st.spinner(f"1️⃣ Đang đọc dữ liệu hình ảnh/PDF và dịch [{translation_mode}]..."):
                     file_bytes = uploaded_file.read()
