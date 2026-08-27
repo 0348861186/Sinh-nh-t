@@ -20,7 +20,7 @@ if not api_key:
 
 # Cấu hình Gemini
 genai.configure(api_key=api_key)
-model = genai.GenerativeModel('gemini-1.5-flash-latest')
+model = genai.GenerativeModel('gemini-2.0-flash')
 
 # -----------------------------------------------------------------------------
 # 1. XỬ LÝ DỊCH EXCEL (GOM BATCH TRÁNH LỖI QUOTA)
