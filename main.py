@@ -1,7 +1,6 @@
 import streamlit as st
 import openpyxl
 from openpyxl.styles import Alignment
-from openpyxl.utils import get_column_letter
 from deep_translator import GoogleTranslator
 import easyocr
 from PIL import Image
@@ -11,18 +10,6 @@ import io
 # Cấu hình trang Streamlit
 st.set_page_config(page_title="Dịch Song Ngữ Trung - Việt", layout="wide")
 st.title("🇨🇳 ĐỒNG BỘ DỊCH SONG NGỮ TRUNG - VIỆT 🇻🇳")
-
-# Khởi tạo EasyOCR (Sử dụng bộ nhớ cache để không bị load lại mỗi lần nhấn nút)
-@st.cache_resource
-def load_ocr():
-    # ch_sim: Tiếng Trung giản thể, vi: Tiếng Việt, en: Tiếng Anh
-    return easyocr.Reader(['ch_sim', 'en', 'vi'])
-
-try:
-    reader = load_ocr()
-except Exception as e:
-    st.error(f"Lỗi khởi tạo bộ lọc OCR: {str(e)}")
-    reader = None
 
 # --- GIAO DIỆN ĐIỀU KHIỂN (DASHBOARD) ---
 st.sidebar.header("CÀI ĐẶT CẤU HÌNH")
@@ -39,9 +26,27 @@ translation_mode = st.sidebar.selectbox(
     options=["Trung -> Việt", "Việt -> Trung"]
 )
 
-# Thiết lập mã ngôn ngữ cho deep-translator
-src_lang = 'zh-CN' if translation_mode == "Trung -> Việt" else 'vi'
-dest_lang = 'vi' if translation_mode == "Trung -> Việt" else 'zh-CN'
+# Thiết lập mã ngôn ngữ cho deep-translator và cấu hình danh sách ngôn ngữ OCR tương ứng
+if translation_mode == "Trung -> Việt":
+    src_lang = 'zh-CN'
+    dest_lang = 'vi'
+    ocr_langs = ['ch_sim', 'en']  # Khắc phục lỗi: Trung giản thể đi kèm với Anh
+else:
+    src_lang = 'vi'
+    dest_lang = 'zh-CN'
+    ocr_langs = ['vi', 'en']      # Tiếng Việt đi kèm với Anh
+
+# Khởi tạo EasyOCR dựa theo ngôn ngữ đầu vào (Sử dụng cache dựa trên ocr_langs)
+@st.cache_resource
+def load_ocr(langs):
+    return easyocr.Reader(list(langs))
+
+try:
+    # Gán danh sách dạng tuple để cơ chế cache của Streamlit nhận diện chính xác
+    reader = load_ocr(tuple(ocr_langs))
+except Exception as e:
+    st.error(f"Lỗi khởi tạo bộ lọc OCR: {str(e)}")
+    reader = None
 
 # Cổng upload file tương ứng
 uploaded_file = None
@@ -80,10 +85,10 @@ def process_excel(file_bytes, src, dest):
                         # Yêu cầu 2 & 3: Nội dung dịch nằm chung ô, dòng đích nằm NGAY DƯỚI dòng gốc
                         cell.value = f"{original_text}\n{translated_text}"
                         
-                        # Kích hoạt wrap_text để tự động xuống dòng trong ô
+                        # Kích hoạt wrap_text để tự động xuống dòng hiển thị song ngữ trong ô
                         cell.alignment = Alignment(wrap_text=True, vertical="top")
                         
-                        # Yêu cầu 1: Giữ nguyên toàn bộ định dạng màu sắc/font/viền cũ từ openpyxl
+                        # Yêu cầu 1: Mọi thuộc tính font, màu, viền... được openpyxl giữ lại nguyên vẹn từ file gốc
     
     out_bio = io.BytesIO()
     wb.save(out_bio)
@@ -93,17 +98,17 @@ def process_excel(file_bytes, src, dest):
 def process_image_to_excel(image_bytes, src, dest):
     """Xử lý Ảnh: Đọc chữ qua OCR bằng PIL, dịch và xuất ra file Excel định dạng cấu trúc song ngữ"""
     if reader is None:
-        st.error("Bộ xử lý ảnh OCR chưa được kích hoạt thành công.")
+        st.error("Bộ xử lý ảnh OCR chưa được kích hoạt thành công do lỗi hệ thống.")
         return None
         
-    # Đọc ảnh bằng thư viện PIL (Không phụ thuộc vào driver mã nguồn mở của OpenCV)
+    # Đọc ảnh bằng thư viện PIL gọn nhẹ
     image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
     img_np = np.array(image)
     
-    # Nhận diện chữ bằng EasyOCR trực tiếp từ mảng numpy của PIL
+    # Nhận diện chữ bằng EasyOCR dựa trên ngôn ngữ nguồn đã tối ưu
     results = reader.readtext(img_np)
     
-    # Tạo một file Excel mới để nhận cấu trúc kết quả trực quan
+    # Tạo một file Excel mới để ghi nhận cấu trúc song ngữ
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "KetQuaDich"
@@ -119,7 +124,7 @@ def process_image_to_excel(image_bytes, src, dest):
         if clean_text:
             translated_text = translate_text(clean_text, src, dest)
             
-            # Ghi dữ liệu song ngữ vào chung ô
+            # Ghi dữ liệu song ngữ vào chung ô, dịch nằm dưới gốc
             cell = ws.cell(row=row_idx, column=1)
             cell.value = f"{clean_text}\n{translated_text}"
             cell.alignment = Alignment(wrap_text=True, vertical="top")
