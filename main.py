@@ -8,9 +8,9 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from PIL import Image
 
-# Sử dụng thư viện dịch thuật chuyên dụng (không lo hết quota API)
+# Thư viện dịch thuật chuyên dụng
 from deep_translator import GoogleTranslator
-# Sử dụng EasyOCR để OCR đọc văn bản từ hình ảnh/PDF
+# Thư viện OCR đọc chữ từ ảnh
 import easyocr
 import numpy as np
 
@@ -26,11 +26,11 @@ st.set_page_config(
 st.title("🤖 Dịch & Xuất Bảng Chấm Công Song Ngữ (Dùng Thư Viện Chuyên Dụng)")
 st.caption("Hỗ trợ chọn chế độ Trung ➔ Việt hoặc Việt ➔ Trung | Giữ nguyên 100% format Excel gốc hoặc chuyển từ Ảnh/PDF.")
 
-# Cache EasyOCR Reader để tránh khởi tạo lại mỗi lần chạy
+# Cache EasyOCR Reader linh hoạt theo danh sách ngôn ngữ
 @st.cache_resource
-def get_ocr_reader():
-    # Khởi tạo reader hỗ trợ cả tiếng Trung giản thể (ch_sim) và tiếng Việt (vi)
-    return easyocr.Reader(['ch_sim', 'vi', 'en'])
+def get_ocr_reader(lang_tuple):
+    # lang_tuple ví dụ: ('ch_sim', 'en') hoặc ('vi', 'en')
+    return easyocr.Reader(list(lang_tuple))
 
 # ============================================================
 # 1. CẤU HÌNH BỘ LỌC HƯỚNG DỊCH & TẢI FILE
@@ -252,7 +252,14 @@ if uploaded_file is not None:
                     image = Image.open(uploaded_file).convert('RGB')
                     image_np = np.array(image)
 
-                    reader = get_ocr_reader()
+                    # Chọn danh sách ngôn ngữ cho EasyOCR dựa theo chế độ dịch
+                    # Khắc phục lỗi: ch_sim chỉ dùng chung được với en
+                    if translation_mode == "Trung ➔ Việt":
+                        ocr_langs = ('ch_sim', 'en')
+                    else:
+                        ocr_langs = ('vi', 'en')
+
+                    reader = get_ocr_reader(ocr_langs)
                     ocr_results = reader.readtext(image_np, detail=0)
 
                     # Trích xuất các đoạn text tìm được
@@ -261,7 +268,7 @@ if uploaded_file is not None:
                 with st.spinner(f"2️⃣ Đang dịch văn bản đã OCR [{translation_mode}]..."):
                     translation_dict = translate_texts_batch(extracted_texts, src_code, tgt_code)
 
-                    # Tự động dựng mấu cấu trúc bảng đơn giản từ kết quả OCR
+                    # Dựng dữ liệu hàng từ kết quả OCR
                     rows_data = []
                     for idx, text in enumerate(extracted_texts, start=1):
                         trans_text = translation_dict.get(text, "")
@@ -276,7 +283,7 @@ if uploaded_file is not None:
                         })
 
                     parsed_data = {
-                        "title_src": "BẢNG CHẤM CÔNG",
+                        "title_src": "BẢNG CHẤM CÔNG" if translation_mode == "Việt ➔ Trung" else "考勤表",
                         "title_tgt": translation_dict.get("BẢNG CHẤM CÔNG", "考勤表"),
                         "date_str": "",
                         "rows": rows_data
