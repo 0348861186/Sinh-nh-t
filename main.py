@@ -77,10 +77,9 @@ if uploaded_file is not None:
                                     cell.alignment = Alignment(wrap_text=True, vertical='center', horizontal=cell.alignment.horizontal if cell.alignment else 'center')
                     
                     # Lưu file sau khi dịch vào bộ nhớ đệm
-                    output = io.BytesIO()
-                    wb.save(output)
-                    output.seek(0)
-                    
+                    output_img = io.BytesIO()
+                    wb_img.save(output_img)
+                    output_img.seek(0)
                     st.success("Dịch thành công!")
                     st.download_button(
                         label="📥 Tải xuống File Excel đã dịch",
