@@ -16,10 +16,10 @@ st.set_page_config(
 )
 
 
-# Khởi tạo OCR reader (ĐÃ FIX: Thêm 'en' đi kèm 'ch_sim' theo yêu cầu của easyocr)
+# Khởi tạo OCR reader (ĐÃ FIX: Easyocr yêu cầu ch_sim phải đi kèm với en)
 @st.cache_resource
 def load_ocr_reader():
-  return easyocr.Reader(["ch_sim", "en", "vi"], gpu=False)
+  return easyocr.Reader(["ch_sim", "en"], gpu=False)
 
 
 # Hàm dịch văn bản sử dụng deep-translator
