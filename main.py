@@ -45,7 +45,6 @@ def translate_text(text):
     """Hàm dịch văn bản an toàn, giữ lại định dạng cơ bản"""
     if not text or not isinstance(text, str):
         return text
-    # Bỏ qua nếu toàn là số hoặc ký tự đặc biệt ngắn
     if text.strip().isdigit() or len(text.strip()) <= 1:
         return text
 
@@ -60,6 +59,12 @@ def translate_text(text):
     return text
 
 
+# Khởi tạo state lưu trữ file Excel đã dịch trong bộ nhớ phiên làm việc
+if "translated_file_bytes" not in st.session_state:
+    st.session_state.translated_file_bytes = None
+if "translated_file_name" not in st.session_state:
+    st.session_state.translated_file_name = None
+
 # 4) Dashboard có nút chọn file load lên (Ảnh hoặc Excel)
 uploaded_file = st.file_uploader(
     "Tải lên file Excel (.xlsx) hoặc Hình ảnh (.png, .jpg, .jpeg)",
@@ -72,42 +77,57 @@ if uploaded_file is not None:
     # XỬ LÝ FILE EXCEL
     if file_extension in ["xlsx", "xls"]:
         st.success(
-            "Đã tải lên file Excel thành công! Hệ thống sẽ giữ nguyên định dạng."
+            "Đã tải lên file Excel thành công! Vui lòng nhấn nút dịch bên dưới."
         )
 
-        if st.button("🚀 Bắt đầu dịch file Excel"):
-            with st.spinner("Đang xử lý và dịch tài liệu..."):
-                try:
-                    # Đọc file bằng openpyxl để giữ nguyên định dạng, màu sắc, font chữ
-                    bytes_data = uploaded_file.getvalue()
-                    wb = load_workbook(io.BytesIO(bytes_data))
+        # 6) Dashboard có nút nhấn dịch và nút download file excel sau dịch (Độc lập rõ ràng)
+        col1, col2 = st.columns(2)
 
-                    for sheet in wb.worksheets:
-                        for row in sheet.iter_rows():
-                            for cell in row:
-                                if cell.value and isinstance(
-                                    cell.value, str
-                                ):
-                                    # Tránh dịch các công thức Excel bắt đầu bằng dấu =
-                                    if not cell.value.startswith("="):
-                                        cell.value = translate_text(cell.value)
+        with col1:
+            if st.button("🚀 Bắt đầu dịch file Excel"):
+                with st.spinner("Đang xử lý và dịch tài liệu..."):
+                    try:
+                        bytes_data = uploaded_file.getvalue()
+                        wb = load_workbook(io.BytesIO(bytes_data))
 
-                    # Lưu file kết quả vào bộ nhớ tạm
-                    output = io.BytesIO()
-                    wb.save(output)
-                    output.seek(0)
+                        for sheet in wb.worksheets:
+                            for row in sheet.iter_rows():
+                                for cell in row:
+                                    if cell.value and isinstance(
+                                        cell.value, str
+                                    ):
+                                        if not cell.value.startswith("="):
+                                            cell.value = translate_text(
+                                                cell.value
+                                            )
 
-                    st.success("Dịch hoàn tất!")
+                        output = io.BytesIO()
+                        wb.save(output)
+                        output.seek(0)
 
-                    # 6) Dashboard có nút download file excel sau dịch
-                    st.download_button(
-                        label="📥 Tải xuống file Excel sau khi dịch",
-                        data=output,
-                        file_name=f"translated_{uploaded_file.name}",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    )
-                except Exception as e:
-                    st.error(f"Dã xảy ra lỗi khi xử lý file Excel: {e}")
+                        # Lưu vào session_state để nút download bên cạnh nhận diện được
+                        st.session_state.translated_file_bytes = output.getvalue()
+                        st.session_state.translated_file_name = (
+                            f"translated_{uploaded_file.name}"
+                        )
+
+                        st.success(
+                            "Dịch hoàn tất! Bạn có thể nhấn nút tải xuống bên cạnh."
+                        )
+                    except Exception as e:
+                        st.error(f"Đã xảy ra lỗi khi xử lý file Excel: {e}")
+
+        with col2:
+            # Nút download file excel luôn hiển thị sẵn (sẽ kích hoạt khi đã dịch xong)
+            if st.session_state.translated_file_bytes is not None:
+                st.download_button(
+                    label="📥 Tải xuống file Excel sau dịch",
+                    data=st.session_state.translated_file_bytes,
+                    file_name=st.session_state.translated_file_name,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            else:
+                st.info("Nhấn 'Bắt đầu dịch' để mở khóa nút tải.")
 
     # XỬ LÝ FILE ẢNH
     elif file_extension in ["png", "jpg", "jpeg"]:
@@ -128,7 +148,6 @@ if uploaded_file is not None:
                             image.save(tmp.name)
                             tmp_path = tmp.name
 
-                        # Khởi tạo EasyOCR đúng chuẩn tương thích (ch_sim đi với en, vi đi với en)
                         if "Trung ➔ Việt" in translation_mode:
                             ocr_langs = ["ch_sim", "en"]
                         else:
