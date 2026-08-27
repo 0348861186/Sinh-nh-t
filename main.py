@@ -107,11 +107,10 @@ if uploaded_file is not None:
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     )
                 except Exception as e:
-                    st.error(f"Đã xảy ra lỗi khi xử lý file Excel: {e}")
+                    st.error(f"Dã xảy ra lỗi khi xử lý file Excel: {e}")
 
     # XỬ LÝ FILE ẢNH
     elif file_extension in ["png", "jpg", "jpeg"]:
-        # Đã cập nhật sửa lỗi tương thích Streamlit mới nhất (bỏ use_column_width)
         st.image(uploaded_file, caption="Ảnh gốc đã tải lên")
 
         if not HAS_OCR:
@@ -129,8 +128,13 @@ if uploaded_file is not None:
                             image.save(tmp.name)
                             tmp_path = tmp.name
 
-                        # Khởi tạo EasyOCR (hỗ trợ tiếng Trung 'ch_sim' và tiếng Việt 'vi')
-                        reader = easyocr.Reader(["ch_sim", "vi"])
+                        # Khởi tạo EasyOCR đúng chuẩn tương thích (ch_sim đi với en, vi đi với en)
+                        if "Trung ➔ Việt" in translation_mode:
+                            ocr_langs = ["ch_sim", "en"]
+                        else:
+                            ocr_langs = ["vi", "en"]
+
+                        reader = easyocr.Reader(ocr_langs)
                         results = reader.readtext(tmp_path)
 
                         st.write("### Kết quả dịch từ ảnh:")
