@@ -43,10 +43,9 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🌐 Dịch & Xuất Bảng Chấm Công Song Ngữ (Tối Ưu Hóa Độ Chính Xác)")
+st.title("🌐 Dịch & Xuất Bảng Chấm Công Song Ngữ (Đã sửa lỗi OCR)")
 st.caption(
-    "1 động - cân mọi định dạng file | Local 100% không mất phí | "
-    "Tự động ánh xạ cột & Từ điển chuyên ngành nhà máy nâng cấp"
+    "Khôi phục độ chính xác tuyệt đối cho bảng chấm công nhà máy"
 )
 
 
@@ -57,7 +56,6 @@ st.caption(
 GLOSSARY_FILE = Path("factory_glossary.json")
 
 DEFAULT_GLOSSARY_ZH_VI = {
-    # Từ khóa hệ thống chung & Nhân sự
     "正式工": "Công nhân chính thức",
     "临时工": "Công nhân thời vụ",
     "部门": "Bộ phận",
@@ -71,17 +69,17 @@ DEFAULT_GLOSSARY_ZH_VI = {
     "晚班": "Ca đêm",
     "休息": "Nghỉ ngơi",
     "组长": "Tổ trưởng",
-    "课长": "Trưởng bộ phận/Khu vực",
+    "课长": "Trưởng bộ phận",
     "请假": "Xin nghỉ phép",
     "加班": "Tăng ca",
-    "旷工": "Tự ý nghỉ việc",
-    
-    # Khu vực / Xưởng mẫu
+    "连机": "Liên máy",
+    "制袋机": "Máy làm túi",
+    "吹膜": "Thổi màng",
     "1车间": "Xưởng 1",
     "2车间": "Xưởng 2",
     "裁断组": "Tổ cắt",
     "针车组": "Tổ may",
-    "成型组": "Tổ hoàn thiện/đế",
+    "成型组": "Tổ hoàn thiện",
     "仓库": "Kho"
 }
 
@@ -103,7 +101,6 @@ def save_glossary(glossary_dict):
     except Exception:
         pass
 
-# Khởi tạo từ điển session
 if "glossary" not in st.session_state:
     st.session_state["glossary"] = load_glossary()
 
@@ -115,10 +112,8 @@ def apply_glossary(text, mode):
     glossary = st.session_state["glossary"]
     
     if mode == "Trung ➔ Việt":
-        # Khớp chính xác tuyệt đối
         if text_cleaned in glossary:
             return glossary[text_cleaned]
-        # Khớp chuỗi con (nếu từ khóa nằm trong câu)
         for k, v in glossary.items():
             if k in text_cleaned:
                 text_cleaned = text_cleaned.replace(k, v)
@@ -223,73 +218,38 @@ def initialize_translation_models():
             except Exception: pass
 
 
-def translate_direct(text, from_code, to_code):
-    text = normalize_text(text)
-    if not text or from_code == to_code: return text
-    translation = find_argos_translation(from_code, to_code)
-    if translation is None:
-        install_argos_package(from_code, to_code)
-        try: get_argos_languages.clear()
-        except Exception: pass
-        translation = find_argos_translation(from_code, to_code)
-    if translation is None: return text
-    try:
-        result = translation.translate(text)
-        return result.strip() if result else text
-    except Exception:
-        return text
-
-
 def translate_text(text, mode):
     text = normalize_text(text)
     if not text:
         return ""
 
-    # 1. Tra từ điển chuyên ngành trước
     glossary_result = apply_glossary(text, mode)
     if glossary_result is not None:
         return glossary_result
 
-    # 2. Dịch qua model local kết hợp
     if mode == "Trung ➔ Việt":
         direct = find_argos_translation("zh", "vi")
         if direct is not None:
             res = direct.translate(text).strip()
             if res: return res
-        english = translate_direct(text, "zh", "en")
-        vietnamese = translate_direct(english, "en", "vi")
-        return vietnamese.strip() if vietnamese else text
     else:
         direct = find_argos_translation("vi", "zh")
         if direct is not None:
             res = direct.translate(text).strip()
             if res: return res
-        english = translate_direct(text, "vi", "en")
-        chinese = translate_direct(english, "en", "zh")
-        return chinese.strip() if chinese else text
+            
+    return text
 
 
 # ============================================================
-# OCR & TIỀN XỬ LÝ ẢNH (TỐI ƯU HÓA ĐỘ NÉT)
+# OCR & TIỀN XỬ LÝ ẢNH (ĐÃ KHÔI PHỤC AN TOÀN)
 # ============================================================
 
 def preprocess_image(image):
+    # Trả về ảnh gốc RGB an toàn, không dùng các bộ lọc làm hỏng nét chữ tiếng Trung
     if image.mode != "RGB":
         image = image.convert("RGB")
-    
-    width, height = image.size
-    scale = 2 if width < 2000 else 1
-    if scale > 1:
-        image = image.resize((width * scale, height * scale), Image.Resampling.LANCZOS)
-    
-    # Chuyển ảnh sang dạng xám (Grayscale) để loại bỏ nhiễu nền bảng chấm công
-    image = image.convert("L")
-    
-    # Tăng độ tương phản mạnh giúp EasyOCR nhận diện ký tự rõ hơn
-    image = ImageEnhance.Contrast(image).enhance(1.8)
-    image = ImageEnhance.Sharpness(image).enhance(1.5)
-    
-    return image.convert("RGB")
+    return image
 
 
 @st.cache_resource
@@ -383,7 +343,7 @@ def clean_number(text):
 # ============================================================
 
 def detect_header_line(lines):
-    keywords = ["部门", "开几台", "正式", "临时", "备注", "bộ phận", "số máy", "chính thức", "thời vụ", "ghi chú", "stt", "tên", "họ tên"]
+    keywords = ["部门", "开几台", "正式", "临时", "备注", "bộ phận", "số máy", "chính thức", "thời vụ", "ghi chú", "stt", "tên"]
     best_idx, best_score = None, 0
     for idx, line in enumerate(lines):
         text = line_to_text(line).lower()
@@ -580,7 +540,6 @@ def build_excel_from_json(data, mode):
 
 mode = st.sidebar.selectbox("Chọn chiều dịch", ["Trung ➔ Việt", "Việt ➔ Trung"])
 
-# Thêm tab tùy chỉnh từ điển trực tiếp trên giao diện
 with st.sidebar.expander("⚙️ Bổ sung từ điển nhanh"):
     new_zh = st.text_input("Từ gốc (Trung/Việt)")
     new_vi = st.text_input("Nghĩa dịch chuẩn")
