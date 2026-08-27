@@ -102,8 +102,7 @@ if uploaded_file is not None:
   else:  # Xử lý Hình ảnh
     st.success("Đã tải lên hình ảnh thành công!")
     image = Image.open(uploaded_file)
-    st.image(image, caption="Hình ảnh gốc", use_column_width=True)
-
+    st.image(image, caption="Hình ảnh gốc", use_container_width=True)
     if st.button("Bắt đầu dịch từ ảnh"):
       with st.spinner(
           "Đang nhận diện chữ tiếng Trung và tạo file Excel kết quả..."
