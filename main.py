@@ -16,10 +16,10 @@ st.set_page_config(
 )
 
 
-# Khởi tạo OCR reader (Sử dụng cache để không load lại nhiều lần)
+# Khởi tạo OCR reader (ĐÃ FIX: Thêm 'en' đi kèm 'ch_sim' theo yêu cầu của easyocr)
 @st.cache_resource
 def load_ocr_reader():
-  return easyocr.Reader(["ch_sim", "vi"], gpu=False)
+  return easyocr.Reader(["ch_sim", "en", "vi"], gpu=False)
 
 
 # Hàm dịch văn bản sử dụng deep-translator
@@ -69,8 +69,6 @@ if uploaded_file is not None:
   if file_extension in ["png", "jpg", "jpeg"]:
     st.subheader("🖼️ Xem trước hình ảnh tải lên")
     image = Image.open(uploaded_file)
-
-    # ĐÃ FIX: Thay thế use_column_width=True bằng cách bỏ trống hoặc dùng width
     st.image(image, caption="Hình ảnh gốc")
 
     if st.button("🚀 Bắt đầu dịch Ảnh"):
