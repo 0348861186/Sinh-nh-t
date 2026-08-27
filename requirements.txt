@@ -1,6 +1,6 @@
 streamlit
-pandas
 openpyxl
-deep-translator
-pillow
+googletrans==4.0.0-rc1
 easyocr
+opencv-python-headless
+numpy
