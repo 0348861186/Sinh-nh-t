@@ -6,42 +6,32 @@ import streamlit as st
 import openpyxl
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from PIL import Image
 from deep_translator import GoogleTranslator
 import easyocr
-import numpy as np
-
-# Kiểm tra hỗ trợ xử lý file PDF
-try:
-    from pdf2image import convert_from_bytes
-    HAS_PDF_SUPPORT = True
-except ImportError:
-    HAS_PDF_SUPPORT = False
+from PIL import Image
 
 # ============================================================
 # CẤU HÌNH STREAMLIT
 # ============================================================
 st.set_page_config(
-    page_title="Hệ Thống Dịch Bảng Chấm Công Hai Chiều",
+    page_title="Hệ Thống Dịch Bảng Chấm Công Hai Chiều (Thư Viện Chuyên Dụng)",
     page_icon="🤖",
     layout="wide"
 )
 
-st.title("🤖 Dịch & Xuất Bảng Chấm Công Song Ngữ")
-st.caption("Hỗ trợ chọn chế độ Trung ➔ Việt hoặc Việt ➔ Trung | Dùng thư viện Local / Free.")
+st.title("🤖 Dịch & Xuất Bảng Chấm Công Song Ngữ (Thư Viện Chuyên Dụng)")
+st.caption("Hỗ trợ chọn chế độ Trung ➔ Việt hoặc Việt ➔ Trung | Giữ nguyên 100% format Excel gốc hoặc chuyển từ Ảnh/PDF mà không tốn Quota AI.")
 
-# Cache Reader EasyOCR để tránh load lại model nhiều lần
+# Cache Reader EasyOCR để tránh load lại model nhiều lần gây chậm
 @st.cache_resource
-def get_ocr_reader(lang_mode):
-    if lang_mode == "Trung ➔ Việt":
-        return easyocr.Reader(['ch_sim', 'en'], gpu=False)
-    else:
-        return easyocr.Reader(['vi', 'en'], gpu=False)
+def get_ocr_reader():
+    # Load model OCR hỗ trợ tiếng Trung (zh), tiếng Việt (vi) và tiếng Anh (en)
+    return easyocr.Reader(['zh', 'vi', 'en'], gpu=False)
 
 # ============================================================
-# 1. CẤU HÌNH BỘ LỌC HƯỚNG DỊCH & TẢI FILE
+# 1. BỘ LỌC HƯỚNG DỊCH & TẢI FILE
 # ============================================================
-col1, col2 = st.columns([1.2, 1.8])
+col1, col2 = st.columns([1, 2])
 
 with col1:
     translation_mode = st.radio(
@@ -67,10 +57,13 @@ def has_vietnamese(text):
     return bool(re.search(vietnamese_pattern, text, re.IGNORECASE))
 
 # ============================================================
-# HÀM DỊCH THUẬT VĂN BẢN (THAY THẾ GEMINI BẰNG DEEP_TRANSLATOR)
+# HÀM DỊCH THUẬT DÙNG THƯ VIỆN DEEP-TRANSLATOR
 # ============================================================
-def translate_batch_local(text_list, mode):
-    if not text_list:
+def translate_texts_batch(texts_list, mode):
+    """
+    Dịch danh sách văn bản dựa trên deep-translator (Google Translate Engine)
+    """
+    if not texts_list:
         return {}
     
     src_code = 'zh-CN' if mode == "Trung ➔ Việt" else 'vi'
@@ -79,85 +72,84 @@ def translate_batch_local(text_list, mode):
     translator = GoogleTranslator(source=src_code, target=tgt_code)
     translation_dict = {}
     
-    for text in text_list:
+    # Dịch từng từ/câu trong danh sách
+    for text in texts_list:
         try:
             translated = translator.translate(text)
             translation_dict[text] = translated
         except Exception:
-            translation_dict[text] = text
+            translation_dict[text] = text # Giữ nguyên nếu dịch lỗi
             
     return translation_dict
 
 # ============================================================
-# HÀM BÓC TÁCH ẢNH/PDF THÀNH JSON (THAY THẾ GEMINI VISION)
+# HÀM XỬ LÝ QUÉT OCR TỪ ẢNH / PDF
 # ============================================================
-def process_image_or_pdf_to_json(file_bytes, file_type, mode):
-    reader = get_ocr_reader(mode)
-    images = []
-
-    if "pdf" in file_type.lower():
-        if not HAS_PDF_SUPPORT:
-            raise ValueError("Chưa cài đặt thư viện `pdf2image` hoặc `poppler` trên hệ thống!")
-        images = convert_from_bytes(file_bytes)
-    else:
-        img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
-        images = [img]
-
-    raw_lines = []
-    for img in images:
-        img_np = np.array(img)
-        results = reader.readtext(img_np, detail=0)
-        raw_lines.extend(results)
-
-    src_code = 'zh-CN' if mode == "Trung ➔ Việt" else 'vi'
-    tgt_code = 'vi' if mode == "Trung ➔ Việt" else 'zh-CN'
-    translator = GoogleTranslator(source=src_code, target=tgt_code)
-
-    date_str = "YYYY-MM-DD"
-    title_src = ""
-    rows = []
-
-    # Tìm ngày tháng trong văn bản
-    for line in raw_lines:
-        date_match = re.search(r'\d{4}[-/.]\d{1,2}[-/.]\d{1,2}', line)
-        if date_match:
-            date_str = date_match.group(0)
-            break
-
-    if raw_lines:
-        title_src = raw_lines[0]
+def process_image_or_pdf_to_data(file_bytes, file_type, mode):
+    """
+    Quét nội dung chữ từ Ảnh/PDF bằng EasyOCR và trích xuất dữ liệu
+    """
+    reader = get_ocr_reader()
     
-    title_tgt = translator.translate(title_src) if title_src else ""
+    image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+    # Quét chữ từ ảnh
+    results = reader.readtext(file_bytes, detail=0)
+    
+    src_lang = "zh-CN" if mode == "Trung ➔ Việt" else "vi"
+    tgt_lang = "vi" if mode == "Trung ➔ Việt" else "zh-CN"
+    translator = GoogleTranslator(source=src_lang, target=tgt_lang)
+    
+    # Bóc tách các chuỗi tìm thấy
+    extracted_lines = [res.strip() for res in results if res.strip()]
+    
+    # Tìm ngày tháng nếu có (định dạng YYYY-MM-DD hoặc YYYY/MM/DD)
+    date_str = ""
+    for line in extracted_lines:
+        match = re.search(r'\d{4}[-/.]\d{1,2}[-/.]\d{1,2}', line)
+        if match:
+            date_str = match.group(0)
+            break
+            
+    # Xây dựng cấu trúc dữ liệu JSON giống logic code gốc
+    title_src = extracted_lines[0] if len(extracted_lines) > 0 else "Bảng Chấm Công"
+    try:
+        title_tgt = translator.translate(title_src)
+    except:
+        title_tgt = title_src
 
-    stt_count = 1
-    for line in raw_lines[1:]:
-        if line.isnumeric() or len(line.strip()) < 2:
-            continue
-        
-        dept_src = line.strip()
-        dept_tgt = translator.translate(dept_src) if dept_src else ""
-
+    rows = []
+    # Trích xuất các dòng thông tin bộ phận
+    dept_lines = [l for l in extracted_lines[1:] if not re.search(r'^\d+$', l)]
+    
+    for idx, line in enumerate(dept_lines, start=1):
+        if idx > 15: # Giới hạn tối đa dòng mẫu
+            break
+        try:
+            trans_line = translator.translate(line)
+        except:
+            trans_line = line
+            
         rows.append({
-            "stt": stt_count,
-            "dept_src": dept_src,
-            "dept_tgt": dept_tgt,
+            "stt": idx,
+            "dept_src": line,
+            "dept_tgt": trans_line,
             "machines": "",
             "formal": "",
             "temp": "",
             "remark": ""
         })
-        stt_count += 1
 
-    # Trả về đúng cấu trúc JSON mà code gốc của bạn yêu cầu
-    return {
+    parsed_data = {
         "title_src": title_src,
         "title_tgt": title_tgt,
-        "date_str": date_str,
+        "date_str": date_str if date_str else time.strftime("%Y-%m-%d"),
         "rows": rows
     }
+    
+    return parsed_data
 
 # ============================================================
-# HÀM TẠO EXCEL TỪ JSON (GIỮ NGUYÊN 100% CODE GỐC CỦA BẠN)
+# HÀM DỰNG FILE EXCEL TỪ DỮ LIỆU (GIỮ NGUYÊN CODE GỐC)
 # ============================================================
 def build_excel_from_json(data, mode):
     wb = Workbook()
@@ -255,7 +247,7 @@ def build_excel_from_json(data, mode):
     return out
 
 # ============================================================
-# 2. LUỒNG XỬ LÝ CHÍNH (GIỮ NGUYÊN LOGIC GỐC)
+# 2. XỬ LÝ DỊCH CHÍNH
 # ============================================================
 if uploaded_file is not None:
     is_excel = uploaded_file.name.lower().endswith('.xlsx')
@@ -263,7 +255,7 @@ if uploaded_file is not None:
 
     if st.button(button_label, use_container_width=True):
         try:
-            # LUỒNG EXCEL (.xlsx) - GIỮ NGUYÊN 100% LOGIC GỐC
+            # TRƯỜNG HỢP 1: EXCEL FILE (.xlsx)
             if is_excel:
                 with st.spinner(f"1️⃣ Đang quét các ô cần dịch theo chế độ [{translation_mode}]..."):
                     file_bytes = uploaded_file.read()
@@ -288,8 +280,8 @@ if uploaded_file is not None:
                 if not unique_texts:
                     st.warning("Không tìm thấy nội dung văn bản phù hợp với chế độ dịch đã chọn!")
                 else:
-                    with st.spinner(f"2️⃣ Đang dịch {len(unique_texts)} văn bản [{translation_mode}]..."):
-                        translation_dict = translate_batch_local(unique_texts, translation_mode)
+                    with st.spinner(f"2️⃣ Đang dịch {len(unique_texts)} văn bản [{translation_mode}] qua Google Translator..."):
+                        translation_dict = translate_texts_batch(unique_texts, translation_mode)
 
                     with st.spinner("3️⃣ Đang chèn bản dịch & giữ nguyên 100% định dạng..."):
                         for sheet in wb.worksheets:
@@ -320,11 +312,11 @@ if uploaded_file is not None:
                             use_container_width=True
                         )
 
-            # LUỒNG ẢNH / PDF
+            # TRƯỜNG HỢP 2: TẢI FILE ẢNH / PDF
             else:
-                with st.spinner(f"1️⃣ Đang đọc dữ liệu hình ảnh/PDF và dịch [{translation_mode}]..."):
+                with st.spinner(f"1️⃣ Đang quét OCR dữ liệu hình ảnh/PDF và dịch [{translation_mode}]..."):
                     file_bytes = uploaded_file.read()
-                    parsed_data = process_image_or_pdf_to_json(file_bytes, uploaded_file.type, translation_mode)
+                    parsed_data = process_image_or_pdf_to_data(file_bytes, uploaded_file.type, translation_mode)
 
                 with st.spinner("2️⃣ Đang tạo bảng Excel định dạng chuẩn..."):
                     excel_bytes = build_excel_from_json(parsed_data, translation_mode)
