@@ -11,7 +11,7 @@ from deep_translator import GoogleTranslator
 import easyocr
 import numpy as np
 
-# Nếu xử lý PDF
+# Kiểm tra hỗ trợ xử lý file PDF
 try:
     from pdf2image import convert_from_bytes
     HAS_PDF_SUPPORT = True
@@ -27,14 +27,17 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🤖 Dịch & Xuất Bảng Chấm Công Song Ngữ (Thư Viện Offline / Free)")
+st.title("🤖 Dịch & Xuất Bảng Chấm Công Song Ngữ (Thư Viện Local / Free)")
 st.caption("Hỗ trợ chọn chế độ Trung ➔ Việt hoặc Việt ➔ Trung | Giữ nguyên 100% format Excel gốc hoặc chuyển từ Ảnh/PDF.")
 
-# Cache Reader EasyOCR để tránh load model AI vision nhiều lần làm chậm app
+# Cache Reader EasyOCR theo ngôn ngữ được chọn
+# EasyOCR yêu cầu: 'ch_sim' chỉ đi kèm được với 'en'
 @st.cache_resource
-def get_ocr_reader():
-    # Khởi tạo mô hình OCR hỗ trợ tiếng Trung (giản thể + phồn thể), tiếng Việt và tiếng Anh
-    return easyocr.Reader(['ch_sim', 'vi', 'en'], gpu=False)
+def get_ocr_reader(lang_mode):
+    if lang_mode == "Trung ➔ Việt":
+        return easyocr.Reader(['ch_sim', 'en'], gpu=False)
+    else:
+        return easyocr.Reader(['vi', 'en'], gpu=False)
 
 # ============================================================
 # 1. CẤU HÌNH BỘ LỌC HƯỚNG DỊCH & TẢI FILE
@@ -65,7 +68,7 @@ def has_vietnamese(text):
     return bool(re.search(vietnamese_pattern, text, re.IGNORECASE))
 
 # ============================================================
-# HÀM DỊCH THUẬT VĂN BẢN KHÔNG DÙNG API KEY (DEEP_TRANSLATOR)
+# HÀM DỊCH THUẬT VĂN BẢN (DEEP_TRANSLATOR)
 # ============================================================
 def translate_batch_local(text_list, mode):
     """
@@ -85,15 +88,15 @@ def translate_batch_local(text_list, mode):
             translated = translator.translate(text)
             translation_dict[text] = translated
         except Exception:
-            translation_dict[text] = text  # Mộc lại từ gốc nếu lỗi dịch từng từ
+            translation_dict[text] = text  # Giữ nguyên từ gốc nếu có lỗi dịch
             
     return translation_dict
 
 # ============================================================
-# HÀM QUÉT OCR VÀ BỐ TRÍ THÀNH JSON (REPLACE GEMINI VISION)
+# HÀM QUÉT OCR VÀ TẠO DỮ LIỆU JSON DỰ PHÒNG
 # ============================================================
 def process_image_or_pdf_to_json(file_bytes, file_type, mode):
-    reader = get_ocr_reader()
+    reader = get_ocr_reader(mode)
     images = []
 
     if "pdf" in file_type.lower():
@@ -107,7 +110,6 @@ def process_image_or_pdf_to_json(file_bytes, file_type, mode):
     raw_lines = []
     for img in images:
         img_np = np.array(img)
-        # Thực hiện OCR lấy văn bản
         results = reader.readtext(img_np, detail=0)
         raw_lines.extend(results)
 
@@ -115,28 +117,24 @@ def process_image_or_pdf_to_json(file_bytes, file_type, mode):
     tgt_code = 'vi' if mode == "Trung ➔ Việt" else 'zh-CN'
     translator = GoogleTranslator(source=src_code, target=tgt_code)
 
-    # Phân tích heuristics đơn giản từ kết quả OCR để tạo cấu trúc JSON đúng chuẩn gốc
     date_str = "YYYY-MM-DD"
     title_src = ""
     rows = []
 
-    # Tìm chuỗi ngày tháng
+    # Tìm chuỗi ngày tháng dạng YYYY-MM-DD hoặc YYYY/MM/DD
     for line in raw_lines:
         date_match = re.search(r'\d{4}[-/.]\d{1,2}[-/.]\d{1,2}', line)
         if date_match:
             date_str = date_match.group(0)
             break
 
-    # Giả định câu văn bản đầu tiên làm Tiêu đề
     if raw_lines:
         title_src = raw_lines[0]
     
     title_tgt = translator.translate(title_src) if title_src else ""
 
-    # Trích xuất dữ liệu dòng (Lọc các dòng văn bản/bộ phận)
     stt_count = 1
     for line in raw_lines[1:]:
-        # Bỏ qua các chuỗi chỉ có số hoặc ký tự ngắn không phải tên bộ phận
         if line.isnumeric() or len(line.strip()) < 2:
             continue
         
@@ -162,7 +160,7 @@ def process_image_or_pdf_to_json(file_bytes, file_type, mode):
     }
 
 # ============================================================
-# HÀM DỰNG FILE EXCEL TỪ JSON (GIỮ NGUYÊN 100% LOGIC GỐC)
+# HÀM DỰNG FILE EXCEL TỪ JSON (GIỮ NGUYÊN LOGIC VÀ FORMAT GỐC)
 # ============================================================
 def build_excel_from_json(data, mode):
     wb = Workbook()
@@ -260,7 +258,7 @@ def build_excel_from_json(data, mode):
     return out
 
 # ============================================================
-# 2. XỬ LÝ DỊCH CHÍNH (LOGIC HOÀN TOÀN GIỮ NGUYÊN)
+# 2. XỬ LÝ DỊCH CHÍNH
 # ============================================================
 if uploaded_file is not None:
     is_excel = uploaded_file.name.lower().endswith('.xlsx')
