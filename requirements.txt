@@ -1,7 +1,6 @@
 streamlit
+pandas
 openpyxl
-numpy
-Pillow
+deep-translator
+pillow
 easyocr
-PyMuPDF
-argostranslate
