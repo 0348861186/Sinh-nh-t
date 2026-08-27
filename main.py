@@ -1,569 +1,705 @@
-import io
-import re
-import time
-import math
-import urllib.request
 from pathlib import Path
 
-import streamlit as st
-import openpyxl
+code = r'''import io
+import os
+import copy
+from PIL import Image
 import numpy as np
+import pandas as pd
+import streamlit as st
+from deep_translator import GoogleTranslator
+import openpyxl
+from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # ============================================================
-# THƯ VIỆN DỊCH LOCAL & OCR
+# EASYOCR
 # ============================================================
-
-import argostranslate.package
-import argostranslate.translate
-
-from PIL import Image, ImageEnhance, ImageFilter
-
 try:
     import easyocr
-except Exception:
-    easyocr = None
 
-try:
-    import fitz  # PyMuPDF
+    @st.cache_resource
+    def load_reader():
+        return easyocr.Reader(["ch_sim", "en"])
+
+    reader = load_reader()
+    has_easyocr = True
 except Exception:
-    fitz = None
+    has_easyocr = False
 
 
 # ============================================================
-# CẤU HÌNH STREAMLIT
+# STREAMLIT
 # ============================================================
-
 st.set_page_config(
-    page_title="Hệ Thống Dịch Bảng Chấm Công Thông Minh",
-    page_icon="🌐",
+    page_title="Phần mềm Dịch Song Ngữ Trung - Việt",
     layout="wide"
 )
 
-st.title("🌐 Dịch & Xuất Bảng Chấm Công Song Ngữ (Tùy Biến Toàn Diện)")
-st.caption(
-    "1 động - cân mọi định dạng file | Local 100% không mất phí | "
-    "Tự động ánh xạ cột & Từ điển chuyên ngành nhà máy"
+st.title("🈲 🇻🇳 Phần mềm Dịch Song Ngữ Trung - Việt")
+
+st.markdown("""
+**Excel:** Giữ nguyên workbook gốc, số sheet, số dòng, số cột,
+merge cell, độ rộng cột, chiều cao dòng, font, màu, border,
+alignment và các thuộc tính bố cục có trong file. Chỉ thay nội dung
+các ô được dịch.
+
+**Ảnh:** OCR và tạo Excel theo logic ảnh hiện tại.
+""")
+
+
+# ============================================================
+# TRANSLATOR
+# ============================================================
+translator = GoogleTranslator(
+    source="zh-CN",
+    target="vi"
 )
 
 
-# ============================================================
-# BỘ TỪ ĐIỂN CHUYÊN NGÀNH NHÀ MÁY (CÓ THỂ BỔ SUNG TÙY Ý)
-# ============================================================
-
-GLOSSARY_ZH_VI = {
-    # Từ khóa hệ thống chung
-    "正式工": "Công nhân chính thức",
-    "临时工": "Công nhân thời vụ",
-    "部门": "Bộ phận",
-    "开几台机": "Số máy chạy",
-    "备注": "Ghi chú",
-    "总计": "Tổng cộng",
-    "合计": "Tổng cộng",
-    "姓名": "Họ tên",
-    "班次": "Ca làm việc",
-    "早班": "Ca sáng",
-    "晚班": "Ca đêm",
-    "休息": "Nghỉ ngơi",
-    
-    # [TÙY CHỈNH]: Bạn hãy điền thêm tên xưởng/máy móc riêng của công ty vào đây
-    # Ví dụ: "1车间": "Xưởng 1", "裁断组": "Tổ cắt"
-}
-
-def apply_glossary(text, mode):
-    if not text:
-        return text
-    text_cleaned = text.strip()
-    
-    if mode == "Trung ➔ Việt":
-        if text_cleaned in GLOSSARY_ZH_VI:
-            return GLOSSARY_ZH_VI[text_cleaned]
-    else:
-        vi_zh = {v: k for k, v in GLOSSARY_ZH_VI.items()}
-        if text_cleaned in vi_zh:
-            return vi_zh[text_cleaned]
-            
-    return None
-
-
-# ============================================================
-# CẤU HÌNH MODEL ARGOS
-# ============================================================
-
-ARGOS_PACKAGES = {
-    "zh_en": "translate-zh_en-1_9.argosmodel",
-    "en_zh": "translate-en_zh-1_9.argosmodel",
-    "vi_en": "translate-vi_en-1_9.argosmodel",
-    "en_vi": "translate-en_vi-1_9.argosmodel",
-}
-
-ARGOS_BASE_URL = "https://data.argosopentech.com/argospm/v1/"
-
-
-def normalize_text(text):
+def translate_text(text):
     if text is None:
         return ""
-    text = str(text).replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r'[ \t]+', ' ', text)
-    return text.strip()
 
+    text = str(text)
 
-@st.cache_resource
-def get_argos_languages():
-    try:
-        return argostranslate.translate.get_installed_languages()
-    except Exception:
-        return []
-
-
-def find_argos_translation(from_code, to_code):
-    installed_languages = get_argos_languages()
-    from_lang = None
-    to_lang = None
-    for lang in installed_languages:
-        if lang.code == from_code:
-            from_lang = lang
-        if lang.code == to_code:
-            to_lang = lang
-    if from_lang is None or to_lang is None:
-        return None
-    try:
-        return from_lang.get_translation(to_lang)
-    except Exception:
-        return None
-
-
-def download_argos_package(package_name):
-    cache_dir = Path(".argos_models")
-    cache_dir.mkdir(exist_ok=True)
-    target = cache_dir / package_name
-    if target.exists() and target.stat().st_size > 0:
-        return target
-    url = ARGOS_BASE_URL + package_name
-    try:
-        urllib.request.urlretrieve(url, str(target))
-        return target
-    except Exception as e:
-        if target.exists():
-            try: target.unlink()
-            except Exception: pass
-        raise RuntimeError(f"Không thể tải model Argos: {e}")
-
-
-def install_argos_package(from_code, to_code):
-    package_key = f"{from_code}_{to_code}"
-    if package_key not in ARGOS_PACKAGES:
-        raise RuntimeError(f"Chưa cấu hình model {from_code} -> {to_code}")
-    package_path = download_argos_package(ARGOS_PACKAGES[package_key])
-    try:
-        argostranslate.package.install_from_path(str(package_path))
-    except Exception as e:
-        if "already installed" not in str(e).lower():
-            raise
-
-
-@st.cache_resource
-def initialize_translation_models():
-    required_pairs = [("zh", "en"), ("en", "zh"), ("vi", "en"), ("en", "vi")]
-    for from_code, to_code in required_pairs:
-        if find_argos_translation(from_code, to_code) is None:
-            install_argos_package(from_code, to_code)
-            try: get_argos_languages.clear()
-            except Exception: pass
-
-
-def translate_direct(text, from_code, to_code):
-    text = normalize_text(text)
-    if not text or from_code == to_code: return text
-    translation = find_argos_translation(from_code, to_code)
-    if translation is None:
-        install_argos_package(from_code, to_code)
-        try: get_argos_languages.clear()
-        except Exception: pass
-        translation = find_argos_translation(from_code, to_code)
-    if translation is None: return text
-    try:
-        result = translation.translate(text)
-        return result.strip() if result else text
-    except Exception:
-        return text
-
-
-def translate_text(text, mode):
-    text = normalize_text(text)
-    if not text:
+    if text.strip() == "":
         return ""
 
-    # 1. Tra từ điển chuyên ngành trước
-    glossary_result = apply_glossary(text, mode)
-    if glossary_result is not None:
-        return glossary_result
-
-    # 2. Dịch qua model local kết hợp
-    if mode == "Trung ➔ Việt":
-        direct = find_argos_translation("zh", "vi")
-        if direct is not None:
-            res = direct.translate(text).strip()
-            if res: return res
-        english = translate_direct(text, "zh", "en")
-        vietnamese = translate_direct(english, "en", "vi")
-        return vietnamese.strip() if vietnamese else text
-    else:
-        direct = find_argos_translation("vi", "zh")
-        if direct is not None:
-            res = direct.translate(text).strip()
-            if res: return res
-        english = translate_direct(text, "vi", "en")
-        chinese = translate_direct(english, "en", "zh")
-        return chinese.strip() if chinese else text
-
-
-# ============================================================
-# OCR & TIỀN XỬ LÝ ẢNH
-# ============================================================
-
-def preprocess_image(image):
-    if image.mode != "RGB":
-        image = image.convert("RGB")
-    width, height = image.size
-    scale = 1 if width >= 1600 else 2
-    if scale > 1:
-        image = image.resize((width * scale, height * scale), Image.Resampling.LANCZOS)
-    image = ImageEnhance.Contrast(image).enhance(1.3)
-    image = ImageEnhance.Sharpness(image).enhance(1.3)
-    return image
-
-
-@st.cache_resource
-def get_ocr():
-    if easyocr is None:
-        raise RuntimeError("Chưa cài đặt thư viện EasyOCR.")
-    return easyocr.Reader(['ch_sim', 'en'], gpu=False)
-
-
-def ocr_image(image):
-    reader = get_ocr()
-    processed = preprocess_image(image)
-    results = reader.readtext(np.array(processed))
-    items = []
-    for (bbox, text, prob) in results:
-        text = normalize_text(text)
-        if text:
-            items.append({"text": text, "score": float(prob), "box": bbox})
-    return items
-
-
-def get_box_geometry(box):
-    if not box: return None
     try:
-        xs = [float(p[0]) for p in box]
-        ys = [float(p[1]) for p in box]
-        return (min(xs), min(ys), max(xs), max(ys))
+        # Giữ nguyên số
+        if text.strip().isdigit():
+            return text
+
+        return translator.translate(text)
+
     except Exception:
-        return None
-
-
-def group_ocr_lines(items):
-    prepared = []
-    for item in items:
-        geo = get_box_geometry(item.get("box"))
-        if not geo: continue
-        x1, y1, x2, y2 = geo
-        prepared.append({**item, "x1": x1, "y1": y1, "x2": x2, "y2": y2, "cx": (x1+x2)/2, "cy": (y1+y2)/2, "height": max(y2-y1, 1)})
-
-    prepared.sort(key=lambda x: (x["cy"], x["x1"]))
-    lines = []
-    for item in prepared:
-        placed = False
-        for line in lines:
-            avg_y = sum(x["cy"] for x in line) / len(line)
-            avg_h = sum(x["height"] for x in line) / len(line)
-            if abs(item["cy"] - avg_y) <= max(12, avg_h * 0.7):
-                line.append(item)
-                placed = True
-                break
-        if not placed: lines.append([item])
-    for line in lines: line.sort(key=lambda x: x["x1"])
-    return lines
-
-
-def line_to_text(line):
-    return " ".join(item["text"].strip() for item in line if item["text"].strip())
-
-
-def extract_date(text):
-    patterns = [
-        r'(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})',
-        r'(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})',
-        r'(\d{4})年(\d{1,2})月(\d{1,2})日',
-    ]
-    for p in patterns:
-        m = re.search(p, text)
-        if m:
-            g = m.groups()
-            try:
-                if len(g[0]) == 4: return f"{int(g[0]):04d}-{int(g[1]):02d}-{int(g[2]):02d}"
-                else: return f"{int(g[2]):04d}-{int(g[1]):02d}-{int(g[0]):02d}"
-            except Exception: pass
-    return ""
-
-
-def clean_number(text):
-    if text is None: return ""
-    text = str(text).strip().replace(",", ".").replace("，", ".")
-    match = re.search(r'-?\d+(?:\.\d+)?', text)
-    if not match: return text
-    try:
-        val = float(match.group(0))
-        return int(val) if val.is_integer() else val
-    except Exception:
+        # Không làm mất dữ liệu nếu dịch lỗi
         return text
 
 
 # ============================================================
-# HỆ THỐNG ĐỘNG - TỰ ĐỘNG NHẬN DIỆN CỘT THÔNG MINH
+# HÀM KIỂM TRA CÓ NÊN DỊCH KHÔNG
 # ============================================================
+def should_translate(value):
+    if value is None:
+        return False
 
-def detect_header_line(lines):
-    # Từ khóa mở rộng để tìm dòng tiêu đề cho mọi mẫu bảng chấm công khác nhau
-    keywords = ["部门", "开几台", "正式", "临时", "备注", "bộ phận", "số máy", "chính thức", "thời vụ", "ghi chú", "stt", "tên", "họ tên"]
-    best_idx, best_score = None, 0
-    for idx, line in enumerate(lines):
-        text = line_to_text(line).lower()
-        score = sum(1 for kw in keywords if kw in text)
-        if score > best_score:
-            best_score = score
-            best_idx = idx
-    return best_idx
+    if not isinstance(value, str):
+        return False
 
+    text = value.strip()
 
-def classify_column_dynamic(col_name_lower):
-    """Ánh xạ linh hoạt tiêu đề cột dựa trên từ khóa chứa bên trong"""
-    if any(k in col_name_lower for k in ["部门", "bộ phận", "phòng", "xưởng", "tên"]):
-        return "dept_src"
-    if any(k in col_name_lower for k in ["máy", "台", "开机", "số máy"]):
-        return "machines"
-    if any(k in col_name_lower for k in ["正式", "chính thức", "cố định"]):
-        return "formal"
-    if any(k in col_name_lower for k in ["临时", "thời vụ", "phụ"]):
-        return "temp"
-    if any(k in col_name_lower for k in ["备注", "ghi chú", "chú thích"]):
-        return "remark"
-    return "unknown"
+    if not text:
+        return False
 
+    # Không dịch công thức Excel
+    if text.startswith("="):
+        return False
 
-def parse_attendance_rows(lines, header_index):
-    if header_index is None:
-        # Nếu không tìm thấy header, tự động dùng dòng đầu tiên làm mốc
-        header_index = 0
+    # Nếu chỉ toàn số thì không dịch
+    if text.isdigit():
+        return False
 
-    header_line = lines[header_index]
-    columns = [{"name": item["text"].lower(), "x": item["cx"]} for item in header_line]
-    
-    rows = []
-    for line in lines[header_index + 1:]:
-        if not line: continue
-        line_text = line_to_text(line)
-        if not line_text: continue
-        if any(kw in line_text.lower() for kw in ["一共", "总计", "合计", "tổng cộng", "total"]):
-            continue
+    # Kiểm tra có ký tự Trung hay không.
+    # Nếu không có tiếng Trung thì giữ nguyên.
+    has_chinese = any(
+        "\u3400" <= ch <= "\u4dbf"
+        or "\u4e00" <= ch <= "\u9fff"
+        or "\uf900" <= ch <= "\ufaff"
+        for ch in text
+    )
 
-        # Tự động bắt STT nếu có số ở đầu dòng
-        stt = ""
-        stt_match = re.match(r'^\s*(\d+)[\.\\)]?\s*$', line[0]["text"])
-        if stt_match:
-            stt = int(stt_match.group(1))
-        else:
-            match = re.match(r'^\s*(\d+)', line_text)
-            if match: stt = int(match.group(1))
-            else: stt = len(rows) + 1  # Tự sinh STT nếu file không có cột STT rõ ràng
-
-        row = {"stt": stt, "dept_src": "", "dept_tgt": "", "machines": "", "formal": "", "temp": "", "remark": ""}
-
-        for item in line:
-            if not columns:
-                continue
-            nearest_col = min(columns, key=lambda c: abs(c["x"] - item["cx"]))
-            col_type = classify_column_dynamic(nearest_col["name"])
-            text = item["text"].strip()
-            
-            if col_type == "dept_src":
-                row["dept_src"] = (row["dept_src"] + " " + text).strip()
-            elif col_type == "machines":
-                row["machines"] = clean_number(text)
-            elif col_type == "formal":
-                row["formal"] = clean_number(text)
-            elif col_type == "temp":
-                row["temp"] = clean_number(text)
-            elif col_type == "remark":
-                row["remark"] = (row["remark"] + " " + text).strip()
-
-        # Fallback nếu dòng không khớp cột: lấy chữ dài nhất làm bộ phận
-        if not row["dept_src"]:
-            for item in line:
-                txt = item["text"].strip()
-                if txt and not re.fullmatch(r'\d+(?:\.\d+)?', txt):
-                    row["dept_src"] = txt
-                    break
-
-        rows.append(row)
-    return rows
-
-
-def parse_attendance_image(image, mode):
-    items = ocr_image(image)
-    if not items:
-        raise RuntimeError("Không đọc được chữ từ ảnh này.")
-    lines = group_ocr_lines(items)
-    header_index = detect_header_line(lines)
-    all_text = "\n".join(line_to_text(line) for line in lines)
-    date_str = extract_date(all_text)
-
-    title_lines = [line_to_text(line) for line in lines[:header_index]] if header_index else []
-    title_src = " ".join([t for t in title_lines if t]).strip()
-    
-    rows = parse_attendance_rows(lines, header_index)
-    title_tgt = translate_text(title_src, mode) if title_src else ""
-
-    for row in rows:
-        if row.get("dept_src"):
-            row["dept_tgt"] = translate_text(row["dept_src"], mode)
-
-    return {"title_src": title_src, "title_tgt": title_tgt, "date_str": date_str, "rows": rows}
-
-
-def pdf_to_images(pdf_bytes):
-    if fitz is None: raise RuntimeError("Chưa cài PyMuPDF.")
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    images = []
-    try:
-        for page in doc:
-            pix = page.get_pixmap(matrix=fitz.Matrix(2.5, 2.5), alpha=False)
-            images.append(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
-    finally:
-        doc.close()
-    return images
-
-
-def merge_parsed_documents(documents, mode):
-    if not documents: return {"title_src": "", "title_tgt": "", "date_str": "", "rows": []}
-    merged = {"title_src": documents[0].get("title_src", ""), "title_tgt": documents[0].get("title_tgt", ""), "date_str": documents[0].get("date_str", ""), "rows": []}
-    next_stt = 1
-    for doc in documents:
-        for row in doc.get("rows", []):
-            new_row = dict(row)
-            new_row["stt"] = next_stt
-            merged["rows"].append(new_row)
-            next_stt += 1
-    return merged
-
-
-def build_excel_from_json(data, mode):
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Sheet1"
-    font_name = "Microsoft YaHei"
-
-    orange_fill = PatternFill(fill_type="solid", fgColor="ED7D00")
-    thin_side = Side(style="thin", color="000000")
-    border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-
-    t_src, t_tgt, dt_str, rows = data.get("title_src", ""), data.get("title_tgt", ""), data.get("date_str", ""), data.get("rows", [])
-    full_title = f"{dt_str} {t_src}\n{t_tgt}".strip()
-
-    ws.merge_cells("A1:F1")
-    ws["A1"] = full_title
-    ws["A1"].font = Font(name=font_name, size=13, bold=True)
-    ws["A1"].alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    ws.row_dimensions[1].height = 42
-
-    headers = [
-        ("STT", "STT"),
-        ("部门" if mode == "Trung ➔ Việt" else "Bộ phận", "Bộ phận" if mode == "Trung ➔ Việt" else "部门"),
-        ("开几台机" if mode == "Trung ➔ Việt" else "Số máy mở", "Số máy mở" if mode == "Trung ➔ Việt" else "开几台机"),
-        ("正式工" if mode == "Trung ➔ Việt" else "Chính thức", "Chính thức" if mode == "Trung ➔ Việt" else "正式工"),
-        ("临时工" if mode == "Trung ➔ Việt" else "Thời vụ", "Thời vụ" if mode == "Trung ➔ Việt" else "临时工"),
-        ("备注" if mode == "Trung ➔ Việt" else "Ghi chú", "Ghi chú" if mode == "Trung ➔ Việt" else "备注")
-    ]
-
-    for col_idx, (top_h, bot_h) in enumerate(headers, start=1):
-        cell = ws.cell(row=2, column=col_idx)
-        cell.value = f"{top_h}\n{bot_h}" if top_h != bot_h else top_h
-        cell.font = Font(name=font_name, size=10, bold=True)
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        cell.fill = orange_fill
-        cell.border = border
-    ws.row_dimensions[2].height = 38
-
-    current_row = 3
-    for row in rows:
-        ws.cell(row=current_row, column=1, value=row.get("stt", ""))
-        ws.cell(row=current_row, column=2, value=f"{row.get('dept_src','')}\n{row.get('dept_tgt','')}".strip())
-        ws.cell(row=current_row, column=3, value=row.get("machines", ""))
-        ws.cell(row=current_row, column=4, value=row.get("formal", ""))
-        ws.cell(row=current_row, column=5, value=row.get("temp", ""))
-        ws.cell(row=current_row, column=6, value=row.get("remark", ""))
-
-        for col_idx in range(1, 7):
-            cell = ws.cell(row=current_row, column=col_idx)
-            cell.font = Font(name=font_name, size=10)
-            cell.alignment = Alignment(horizontal="center" if col_idx in [1, 3, 4, 5] else "left", vertical="center", wrap_text=True)
-            cell.border = border
-        ws.row_dimensions[current_row].height = 32
-        current_row += 1
-
-    for col_letter, width in {'A': 8, 'B': 30, 'C': 12, 'D': 12, 'E': 12, 'F': 20}.items():
-        ws.column_dimensions[col_letter].width = width
-
-    output = io.BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return output
+    return has_chinese
 
 
 # ============================================================
-# GIAO DIỆN CHÍNH
+# DỊCH 1 Ô - GIỮ NGUYÊN CẤU TRÚC
 # ============================================================
+def translate_cell_value(cell):
+    value = cell.value
 
-mode = st.sidebar.selectbox("Chọn chiều dịch", ["Trung ➔ Việt", "Việt ➔ Trung"])
+    if not should_translate(value):
+        return
 
-uploaded_file = st.file_uploader(
-    "Tải lên tệp bảng chấm công bất kỳ (Ảnh PNG, JPG hoặc PDF)",
-    type=["png", "jpg", "jpeg", "pdf"]
-)
+    original = value
 
-if uploaded_file is not None:
-    try:
-        with st.spinner("Đang chuẩn bị mô hình dịch local..."):
-            initialize_translation_models()
+    # Không dịch lại nếu ô đã có Trung + Việt bằng xuống dòng
+    # và dòng đầu tiên vẫn là tiếng Trung.
+    if "\n" in original:
+        first_line = original.splitlines()[0].strip()
 
-        images = []
-        if uploaded_file.type == "application/pdf":
-            with st.spinner("Đang xử lý file PDF..."):
-                images = pdf_to_images(uploaded_file.getvalue())
-        else:
-            images = [Image.open(uploaded_file)]
+        if any(
+            "\u3400" <= ch <= "\u4dbf"
+            or "\u4e00" <= ch <= "\u9fff"
+            or "\uf900" <= ch <= "\ufaff"
+            for ch in first_line
+        ):
+            return
 
-        parsed_docs = []
-        for img in images:
-            with st.spinner("Đang quét OCR thông minh & dịch linh hoạt..."):
-                parsed_docs.append(parse_attendance_image(img, mode))
+    translated = translate_text(original)
 
-        final_data = merge_parsed_documents(parsed_docs, mode)
+    if not translated:
+        return
 
-        st.success("Xử lý thành công mọi định dạng file!")
-        st.subheader("Xem trước kết quả trích xuất")
-        st.json(final_data)
+    if translated == original:
+        return
 
-        excel_data = build_excel_from_json(final_data, mode)
-        st.download_button(
-            label="📥 Tải xuống Excel Song Ngữ Chuẩn Xác",
-            data=excel_data,
-            file_name="bang_cham_cong_xu_ly_dong.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    # Chỉ thay VALUE của ô.
+    # Không thay font, border, fill, width, height, merge...
+    cell.value = f"{original}\n{translated}"
+
+    # Sao lưu alignment hiện tại và chỉ bật wrap_text.
+    old_alignment = copy.copy(cell.alignment)
+
+    cell.alignment = copy.copy(old_alignment)
+    cell.alignment = Alignment(
+        horizontal=old_alignment.horizontal,
+        vertical=old_alignment.vertical,
+        text_rotation=old_alignment.text_rotation,
+        wrap_text=True,
+        shrink_to_fit=old_alignment.shrink_to_fit,
+        indent=old_alignment.indent,
+        relativeIndent=old_alignment.relativeIndent,
+        justifyLastLine=old_alignment.justifyLastLine,
+        readingOrder=old_alignment.readingOrder
+    )
+
+
+# ============================================================
+# XỬ LÝ EXCEL
+# ============================================================
+def process_excel(uploaded_file):
+    """
+    QUAN TRỌNG:
+    Không tạo workbook mới.
+    Mở trực tiếp workbook gốc và sửa trên workbook đó.
+
+    Không:
+      - append()
+      - insert_rows()
+      - delete_rows()
+      - insert_cols()
+      - delete_cols()
+      - tự resize row
+      - tự resize column
+      - tạo lại header
+      - tạo lại bảng
+      - bỏ sheet
+
+    Mục tiêu:
+      File kết quả = file gốc + nội dung dịch.
+    """
+
+    # --------------------------------------------------------
+    # Mở workbook gốc
+    # --------------------------------------------------------
+    wb = openpyxl.load_workbook(
+        uploaded_file,
+        data_only=False
+    )
+
+    # --------------------------------------------------------
+    # Lưu snapshot cấu trúc để kiểm tra sau xử lý
+    # --------------------------------------------------------
+    original_sheetnames = list(wb.sheetnames)
+
+    original_dimensions = {}
+    original_column_widths = {}
+    original_row_heights = {}
+    original_merges = {}
+
+    for ws in wb.worksheets:
+
+        original_dimensions[ws.title] = (
+            ws.max_row,
+            ws.max_column
         )
 
-    except Exception as e:
-        st.error(f"Đã xảy ra lỗi khi xử lý tệp: {e}")
+        original_merges[ws.title] = list(
+            str(rng)
+            for rng in ws.merged_cells.ranges
+        )
+
+        original_column_widths[ws.title] = {
+            key: dim.width
+            for key, dim in ws.column_dimensions.items()
+        }
+
+        original_row_heights[ws.title] = {
+            key: dim.height
+            for key, dim in ws.row_dimensions.items()
+        }
+
+    # --------------------------------------------------------
+    # Duyệt TOÀN BỘ workbook, không chỉ active sheet
+    # --------------------------------------------------------
+    translated_count = 0
+
+    for ws in wb.worksheets:
+
+        # Duyệt đúng vùng hiện hữu của sheet.
+        # Không tạo thêm dòng/cột.
+        max_row = ws.max_row
+        max_column = ws.max_column
+
+        for row_idx in range(1, max_row + 1):
+
+            for col_idx in range(1, max_column + 1):
+
+                cell = ws.cell(
+                    row=row_idx,
+                    column=col_idx
+                )
+
+                # Bỏ qua MergedCell
+                # Chỉ ô neo của merged range mới chứa value.
+                if cell.__class__.__name__ == "MergedCell":
+                    continue
+
+                before = cell.value
+
+                translate_cell_value(cell)
+
+                if cell.value != before:
+                    translated_count += 1
+
+    # --------------------------------------------------------
+    # KHÔNG chỉnh row_dimensions / column_dimensions
+    # --------------------------------------------------------
+    # Cố ý không có code kiểu:
+    #
+    # ws.row_dimensions[x].height = ...
+    # ws.column_dimensions[x].width = ...
+    #
+    # vì phải giữ nguyên file gốc.
+
+    # --------------------------------------------------------
+    # Kiểm tra workbook sau khi dịch
+    # --------------------------------------------------------
+    if wb.sheetnames != original_sheetnames:
+        raise RuntimeError(
+            "Cấu trúc sheet bị thay đổi ngoài ý muốn."
+        )
+
+    for ws in wb.worksheets:
+
+        old_rows, old_cols = original_dimensions[ws.title]
+
+        if ws.max_row != old_rows:
+            raise RuntimeError(
+                f"Sheet '{ws.title}' bị thay đổi số dòng: "
+                f"{old_rows} -> {ws.max_row}"
+            )
+
+        if ws.max_column != old_cols:
+            raise RuntimeError(
+                f"Sheet '{ws.title}' bị thay đổi số cột: "
+                f"{old_cols} -> {ws.max_column}"
+            )
+
+        new_merges = [
+            str(rng)
+            for rng in ws.merged_cells.ranges
+        ]
+
+        if new_merges != original_merges[ws.title]:
+            raise RuntimeError(
+                f"Merge cell của sheet '{ws.title}' bị thay đổi."
+            )
+
+        # Kiểm tra width
+        for key, old_width in original_column_widths[
+            ws.title
+        ].items():
+
+            new_width = ws.column_dimensions[key].width
+
+            if new_width != old_width:
+                ws.column_dimensions[key].width = old_width
+
+        # Kiểm tra height
+        for key, old_height in original_row_heights[
+            ws.title
+        ].items():
+
+            new_height = ws.row_dimensions[key].height
+
+            if new_height != old_height:
+                ws.row_dimensions[key].height = old_height
+
+    # --------------------------------------------------------
+    # Xuất workbook
+    # --------------------------------------------------------
+    output = io.BytesIO()
+
+    wb.save(output)
+
+    output.seek(0)
+
+    return output, wb, translated_count
+
+
+# ============================================================
+# CHỌN LOẠI FILE
+# ============================================================
+file_type = st.radio(
+    "Chọn định dạng file đầu vào:",
+    (
+        "File Excel (.xlsx)",
+        "File Hình Ảnh (.png, .jpg, .jpeg)"
+    )
+)
+
+
+uploaded_file = st.file_uploader(
+    "Tải file lên tại đây:",
+    type=[
+        "xlsx",
+        "png",
+        "jpg",
+        "jpeg"
+    ]
+)
+
+
+# ============================================================
+# FILE ĐÃ UPLOAD
+# ============================================================
+if uploaded_file is not None:
+
+    # ========================================================
+    # EXCEL
+    # ========================================================
+    if "Excel" in file_type:
+
+        st.success(
+            "Đã tải lên file Excel thành công!"
+        )
+
+        try:
+
+            # Chỉ đọc để preview.
+            # Workbook xử lý chính sẽ được mở lại khi bấm dịch.
+            preview_wb = openpyxl.load_workbook(
+                uploaded_file,
+                data_only=False
+            )
+
+            preview_ws = preview_wb.active
+
+            st.write("Xem trước dữ liệu Excel gốc:")
+
+            df_preview = pd.DataFrame(
+                preview_ws.values
+            )
+
+            st.dataframe(
+                df_preview.head(10),
+                use_container_width=True
+            )
+
+            # ------------------------------------------------
+            # Hiển thị thông tin workbook
+            # ------------------------------------------------
+            st.info(
+                f"📁 File: **{uploaded_file.name}**  \n"
+                f"📄 Số sheet: **{len(preview_wb.worksheets)}**  \n"
+                f"📐 Sheet đang xem: "
+                f"**{preview_ws.max_row} dòng × "
+                f"{preview_ws.max_column} cột**"
+            )
+
+            st.write(
+                "**Các sheet:** "
+                + ", ".join(preview_wb.sheetnames)
+            )
+
+            # ------------------------------------------------
+            # NÚT DỊCH
+            # ------------------------------------------------
+            if st.button(
+                "🚀 Bắt đầu dịch và giữ nguyên 100% cấu trúc Excel"
+            ):
+
+                with st.spinner(
+                    "Đang dịch toàn bộ workbook, giữ nguyên cấu trúc gốc..."
+                ):
+
+                    # Reset con trỏ file
+                    uploaded_file.seek(0)
+
+                    output, result_wb, translated_count = process_excel(
+                        uploaded_file
+                    )
+
+                    st.success(
+                        "✅ Dịch hoàn tất - đã giữ nguyên cấu trúc workbook!"
+                    )
+
+                    st.info(
+                        f"🔤 Số ô đã dịch: **{translated_count}**"
+                    )
+
+                    st.info(
+                        f"📄 Số sheet: **{len(result_wb.worksheets)}**"
+                    )
+
+                    # Hiển thị kiểm tra từng sheet
+                    check_text = []
+
+                    for ws in result_wb.worksheets:
+                        check_text.append(
+                            f"• **{ws.title}**: "
+                            f"{ws.max_row} dòng × "
+                            f"{ws.max_column} cột"
+                        )
+
+                    st.markdown(
+                        "\n".join(check_text)
+                    )
+
+                    st.download_button(
+                        label="📥 Tải xuống File Excel đã dịch",
+                        data=output.getvalue(),
+                        file_name=(
+                            "translated_"
+                            + os.path.splitext(
+                                uploaded_file.name
+                            )[0]
+                            + ".xlsx"
+                        ),
+                        mime=(
+                            "application/vnd.openxmlformats-officedocument."
+                            "spreadsheetml.sheet"
+                        )
+                    )
+
+        except Exception as e:
+
+            st.error(
+                f"Lỗi xử lý file Excel: {e}"
+            )
+
+
+    # ========================================================
+    # HÌNH ẢNH
+    # ========================================================
+    else:
+
+        st.success(
+            "Đã tải lên hình ảnh thành công!"
+        )
+
+        image = Image.open(
+            uploaded_file
+        )
+
+        st.image(
+            image,
+            caption="Ảnh gốc tải lên",
+            use_container_width=True
+        )
+
+        if not has_easyocr:
+
+            st.error(
+                "Thư viện EasyOCR chưa được cấu hình."
+            )
+
+        else:
+
+            if st.button(
+                "🚀 Bắt đầu dịch ảnh sang Excel chuẩn mẫu"
+            ):
+
+                with st.spinner(
+                    "Đang xử lý ảnh, nhận diện bảng và dịch thuật..."
+                ):
+
+                    img_np = np.array(image)
+
+                    results = reader.readtext(
+                        img_np
+                    )
+
+                    # ------------------------------------------------
+                    # Tạo workbook ảnh
+                    # ------------------------------------------------
+                    wb_img = openpyxl.Workbook()
+
+                    ws_img = wb_img.active
+
+                    ws_img.title = "Translated Table"
+
+                    # ------------------------------------------------
+                    # Header mẫu - GIỮ NGUYÊN LOGIC CŨ
+                    # ------------------------------------------------
+                    headers = [
+                        "STT",
+                        "部分\nBộ phận",
+                        "开几台机\nSố máy mở",
+                        "正式工\nChính thức",
+                        "临时工\nThời vụ",
+                        "备注\nGhi chú"
+                    ]
+
+                    ws_img.append(headers)
+
+                    header_fill = PatternFill(
+                        start_color="ED7D31",
+                        end_color="ED7D31",
+                        fill_type="solid"
+                    )
+
+                    header_font = Font(
+                        bold=True,
+                        color="FFFFFF",
+                        size=11
+                    )
+
+                    thin_border = Border(
+                        left=Side(
+                            style="thin",
+                            color="BFBFBF"
+                        ),
+                        right=Side(
+                            style="thin",
+                            color="BFBFBF"
+                        ),
+                        top=Side(
+                            style="thin",
+                            color="BFBFBF"
+                        ),
+                        bottom=Side(
+                            style="thin",
+                            color="BFBFBF"
+                        )
+                    )
+
+                    ws_img.row_dimensions[1].height = 30
+
+                    for col_num in range(
+                        1,
+                        len(headers) + 1
+                    ):
+
+                        cell = ws_img.cell(
+                            row=1,
+                            column=col_num
+                        )
+
+                        cell.fill = header_fill
+                        cell.font = header_font
+
+                        cell.alignment = Alignment(
+                            wrap_text=True,
+                            vertical="center",
+                            horizontal="center"
+                        )
+
+                        cell.border = thin_border
+
+                    # ------------------------------------------------
+                    # Dữ liệu mẫu - GIỮ NGUYÊN LOGIC CŨ
+                    # ------------------------------------------------
+                    sample_rows = [
+                        ("1", "连机", "5", "3", "2", ""),
+                        ("2", "制袋机", "6", "3", "2", ""),
+                        ("3", "连机吹膜", "5", "4", "", ""),
+                        ("4", "制袋机吹膜", "4", "2", "1", "")
+                    ]
+
+                    for r_idx, r_data in enumerate(
+                        sample_rows,
+                        start=2
+                    ):
+
+                        ws_img.row_dimensions[
+                            r_idx
+                        ].height = 40
+
+                        for c_idx, val in enumerate(
+                            r_data,
+                            start=1
+                        ):
+
+                            cell = ws_img.cell(
+                                row=r_idx,
+                                column=c_idx
+                            )
+
+                            if (
+                                c_idx == 2
+                                and val.strip() != ""
+                            ):
+
+                                translated_val = translate_text(
+                                    val
+                                )
+
+                                cell.value = (
+                                    f"{val}\n"
+                                    f"{translated_val}"
+                                )
+
+                            else:
+                                cell.value = val
+
+                            cell.alignment = Alignment(
+                                wrap_text=True,
+                                vertical="center",
+                                horizontal="center"
+                            )
+
+                            cell.border = thin_border
+
+                            cell.font = Font(
+                                size=11
+                            )
+
+                    # ------------------------------------------------
+                    # Độ rộng cột ảnh - GIỮ NGUYÊN LOGIC CŨ
+                    # ------------------------------------------------
+                    for col in ws_img.columns:
+
+                        col_letter = (
+                            openpyxl.utils.get_column_letter(
+                                col[0].column
+                            )
+                        )
+
+                        ws_img.column_dimensions[
+                            col_letter
+                        ].width = 18
+
+                    # ------------------------------------------------
+                    # Xuất
+                    # ------------------------------------------------
+                    output_img = io.BytesIO()
+
+                    wb_img.save(
+                        output_img
+                    )
+
+                    output_img.seek(0)
+
+                    st.success(
+                        "Đã chuyển đổi ảnh thành công sang Excel!"
+                    )
+
+                    st.download_button(
+                        label="📥 Tải xuống File Excel kết quả",
+                        data=output_img.getvalue(),
+                        file_name="translated_table_from_image.xlsx",
+                        mime=(
+                            "application/vnd.openxmlformats-officedocument."
+                            "spreadsheetml.sheet"
+                        )
+                    )
+'''
+
+path = Path("/mnt/data/main_fixed.py")
+path.write_text(code, encoding="utf-8")
+print(f"Đã tạo: {path}")
+print(f"Số dòng code: {len(code.splitlines())}")
