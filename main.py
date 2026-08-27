@@ -297,8 +297,8 @@ def preprocess_image(image):
 def get_ocr():
     if easyocr is None:
         raise RuntimeError("Chưa cài đặt thư viện EasyOCR.")
-    # Hỗ trợ tiếng Trung giản thể, tiếng Việt và tiếng Anh
-    return easyocr.Reader(['ch_sim', 'vi', 'en'], gpu=False)
+    # EasyOCR yêu cầu kết hợp ch_sim với en để tránh lỗi tương thích
+    return easyocr.Reader(['ch_sim', 'en'], gpu=False)
 
 
 def ocr_image(image):
