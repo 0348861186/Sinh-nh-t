@@ -1,61 +1,100 @@
 import io
 import json
 import re
+import time
 import streamlit as st
 import openpyxl
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from PIL import Image
 from deep_translator import GoogleTranslator
-import easyocr
+from PIL import Image
 import numpy as np
+
+# Thử import các thư viện OCR và đọc file bổ trợ
+try:
+    import easyocr
+    # Khởi tạo sẵn reader cho tiếng Trung và tiếng Việt
+    @st.cache_resource
+    def get_ocr_reader():
+        return easyocr.Reader(['ch_sim', 'vi', 'en'], gpu=False)
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
+
+try:
+    import fitz  # PyMuPDF để xử lý PDF sang ảnh
+    PDF_IMAGE_AVAILABLE = True
+except ImportError:
+    PDF_IMAGE_AVAILABLE = False
+
 
 # ============================================================
 # CẤU HÌNH STREAMLIT
 # ============================================================
 st.set_page_config(
-    page_title="Hệ Thống Dịch Bảng Chấm Công Chuẩn Xác",
+    page_title="Hệ Thống Dịch Bảng Chấm Công Hai Chiều",
     page_icon="🤖",
     layout="wide"
 )
 
-st.title("🤖 Trích Xuất & Dịch Bảng Chấm Công Song Ngữ (Chuẩn Xác 100%)")
-st.caption("Khắc phục hoàn toàn lỗi lệch dòng, lệch cột và nhận diện sai số liệu từ Ảnh/PDF.")
+st.title("🤖 Dịch & Xuất Bảng Chấm Công Song Ngữ (Dùng Thư Viện Chuyên Dụng)")
+st.caption("Hỗ trợ chọn chế độ Trung ➔ Việt hoặc Việt ➔ Trung | Giữ nguyên 100% format Excel gốc hoặc chuyển từ Ảnh/PDF.")
 
-@st.cache_resource
-def get_ocr_reader(lang_tuple):
-    return easyocr.Reader(list(lang_tuple))
+# ============================================================
+# 1. CẤU HÌNH BỘ LỌC HƯỚNG DỊCH & TẢI FILE
+# ============================================================
+col1, col2 = st.columns([1.2, 1.8])
 
-col1, col2 = st.columns([1, 2])
 with col1:
     translation_mode = st.radio(
         "Chế độ dịch:",
         options=["Trung ➔ Việt", "Việt ➔ Trung"],
         horizontal=True
     )
+
 with col2:
     uploaded_file = st.file_uploader(
         "Tải lên Ảnh, PDF hoặc File Excel:",
-        type=["png", "jpg", "jpeg", "xlsx"]
+        type=["png", "jpg", "jpeg", "pdf", "xlsx"]
     )
 
-def translate_text(text, src_lang, tgt_lang):
-    if not text or not text.strip():
-        return ""
-    try:
-        return GoogleTranslator(source=src_lang, target=tgt_lang).translate(text)
-    except Exception:
+# Hàm kiểm tra chuỗi
+def has_chinese(text):
+    return bool(re.search(r'[\u4e00-\u9fff]', str(text))) if text else False
+
+def has_vietnamese(text):
+    if not isinstance(text, str):
+        return False
+    vietnamese_pattern = r'[àáảãạâầấẩẫậăằắẳẵặèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđĐ]'
+    return bool(re.search(vietnamese_pattern, text, re.IGNORECASE))
+
+# ============================================================
+# HÀM DỊCH THUẬT DÙNG THƯ VIỆN CHUYÊN DỤNG (DEEP-TRANSLATOR)
+# ============================================================
+def translate_text(text, mode):
+    if not text or not str(text).strip():
         return text
+    
+    # Xác định ngôn ngữ nguồn và đích cho deep-translator
+    # 'zh-CN' cho tiếng Trung, 'vi' cho tiếng Việt
+    source_lang = 'zh-CN' if mode == "Trung ➔ Việt" else 'vi'
+    target_lang = 'vi' if mode == "Trung ➔ Việt" else 'zh-CN'
+    
+    try:
+        translator = GoogleTranslator(source=source_lang, target=target_lang)
+        result = translator.translate(str(text))
+        return result if result else text
+    except Exception as e:
+        # Fallback thử lại nếu lỗi mạng tạm thời
+        try:
+            time.sleep(1)
+            translator = GoogleTranslator(source=source_lang, target=target_lang)
+            return translator.translate(str(text))
+        except:
+            return text
 
-# Dữ liệu chuẩn xác từ bảng gốc mẫu nếu OCR quét thiếu
-DEFAULT_TABLE_DATA = [
-    {"stt": "1", "dept": "连机", "machines": "5", "formal": "3", "temp": "2", "remark": ""},
-    {"stt": "2", "dept": "制袋机", "machines": "6", "formal": "3", "temp": "2", "remark": ""},
-    {"stt": "3", "dept": "连机吹膜", "machines": "5", "formal": "4", "temp": "", "remark": ""},
-    {"stt": "4", "dept": "制袋机吹膜", "machines": "4", "formal": "2", "temp": "1", "remark": ""}
-]
-
-def build_excel_from_data(rows_data, title_src, title_tgt, mode):
+# Hàm dựng file Excel từ dữ liệu trích xuất (khi scan Ảnh/PDF)
+def build_excel_from_json(data, mode):
     wb = Workbook()
     ws = wb.active
     ws.title = "Sheet1"
@@ -65,35 +104,26 @@ def build_excel_from_data(rows_data, title_src, title_tgt, mode):
     thin_side = Side(style="thin", color="000000")
     border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
 
-    top_title = title_src if mode == "Trung ➔ Việt" else title_tgt
-    bot_title = title_tgt if mode == "Trung ➔ Việt" else title_src
+    t_src = data.get("title_src", "")
+    t_tgt = data.get("title_tgt", "")
+    dt_str = data.get("date_str", "")
+    rows = data.get("rows", [])
 
-    full_title = f"{top_title}\n{bot_title}".strip()
+    top_title = t_src if mode == "Trung ➔ Việt" else t_tgt
+    bot_title = t_tgt if mode == "Trung ➔ Việt" else t_src
+
+    full_title = f"{dt_str} {top_title}\n{bot_title} ngày {dt_str}".strip()
     ws.merge_cells("A1:F1")
     ws["A1"] = full_title
     ws["A1"].font = Font(name=font_name, size=13, bold=True)
     ws["A1"].alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    ws.row_dimensions[1].height = 45
+    ws.row_dimensions[1].height = 42
 
-    headers = [
-        ("STT", "STT"), 
-        ("部门", "Bộ phận"), 
-        ("开几台机", "Số máy mở"), 
-        ("正式工", "Chính thức"), 
-        ("临时工", "Thời vụ"), 
-        ("备注", "Ghi chú")
-    ] if mode == "Trung ➔ Việt" else [
-        ("STT", "STT"), 
-        ("Bộ phận", "部门"), 
-        ("Số máy mở", "开几台机"), 
-        ("Chính thức", "正式工"), 
-        ("Thời vụ", "临时工"), 
-        ("Ghi chú", "备注")
-    ]
+    headers = [("STT", "STT"), ("部门", "Bộ phận"), ("开几台机", "Số máy mở"), ("正式工", "Chính thức"), ("临时工", "Thời vụ"), ("备注", "Ghi chú")] if mode == "Trung ➔ Việt" else [("STT", "STT"), ("Bộ phận", "部门"), ("Số máy mở", "开几台机"), ("Chính thức", "正式工"), ("Thời vụ", "临时工"), ("Ghi chú", "备注")]
 
     for col_idx, (top_h, bot_h) in enumerate(headers, start=1):
         cell = ws.cell(row=2, column=col_idx)
-        cell.value = f"{top_h}\n{bot_h}"
+        cell.value = f"{top_h}\n{bot_h}" if top_h != bot_h else top_h
         cell.font = Font(name=font_name, size=10, bold=True)
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.fill = orange_fill
@@ -103,14 +133,14 @@ def build_excel_from_data(rows_data, title_src, title_tgt, mode):
     current_row = 3
     total_workers = 0
 
-    for r in rows_data:
-        stt = r["stt"]
-        d_src = r["dept"]
-        d_tgt = r["dept_tgt"]
-        mac = r["machines"]
-        fml = r["formal"]
-        tmp = r["temp"]
-        rmk = r["remark"]
+    for row in rows:
+        stt = row.get("stt", "")
+        d_src = str(row.get("dept_src", "")) if row.get("dept_src") else ""
+        d_tgt = str(row.get("dept_tgt", "")) if row.get("dept_tgt") else ""
+        mac = row.get("machines", "") or ""
+        fml = row.get("formal", "") or ""
+        tmp = row.get("temp", "") or ""
+        rmk = str(row.get("remark", "")) if row.get("remark") else ""
 
         try:
             if fml: total_workers += float(fml)
@@ -134,11 +164,9 @@ def build_excel_from_data(rows_data, title_src, title_tgt, mode):
         ws.row_dimensions[current_row].height = 32
         current_row += 1
 
-    # Hàng tổng cộng
     total_row = current_row
     ws.merge_cells(start_row=total_row, start_column=1, end_row=total_row, end_column=2)
     ws.cell(row=total_row, column=1, value="一共\nTổng cộng" if mode == "Trung ➔ Việt" else "Tổng cộng\n一共")
-    
     ws.merge_cells(start_row=total_row, start_column=3, end_row=total_row, end_column=5)
     ws.cell(row=total_row, column=3, value=int(total_workers) if isinstance(total_workers, float) and total_workers.is_integer() else total_workers)
 
@@ -162,155 +190,154 @@ def build_excel_from_data(rows_data, title_src, title_tgt, mode):
     return out
 
 # ============================================================
-# XỬ LÝ CHÍNH
+# 2. XỬ LÝ DỊCH CHÍNH
 # ============================================================
 if uploaded_file is not None:
     is_excel = uploaded_file.name.lower().endswith('.xlsx')
-    
-    if st.button("🚀 Xử Lý & Xuất Excel Chuẩn Xác", use_container_width=True):
+    button_label = f"🚀 Dịch ({translation_mode}) & Bảo Toàn Format Excel" if is_excel else f"🚀 Quét OCR Ảnh/PDF & Dịch ({translation_mode})"
+
+    if st.button(button_label, use_container_width=True):
         try:
-            src_code = 'zh-CN' if translation_mode == "Trung ➔ Việt" else 'vi'
-            tgt_code = 'vi' if translation_mode == "Trung ➔ Việt" else 'zh-CN'
-
+            # TRƯỜNG HỢP 1: EXCEL FILE (.xlsx)
             if is_excel:
-                # Xử lý file Excel trực tiếp giữ nguyên format
-                file_bytes = uploaded_file.read()
-                wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
-                for sheet in wb.worksheets:
-                    for row in sheet.iter_rows():
-                        for cell in row:
-                            if cell.value and isinstance(cell.value, str):
-                                val = cell.value.strip()
-                                if not val.startswith("="):
-                                    trans = translate_text(val, src_code, tgt_code)
-                                    if trans and trans != val:
-                                        cell.value = f"{val}\n{trans}"
-                                        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-                output = io.BytesIO()
-                wb.save(output)
-                output.seek(0)
-                st.success("✅ Đã dịch và cập nhật file Excel thành công!")
-                st.download_button("⬇️ Tải File Excel Song Ngữ (.xlsx)", output.getvalue(), file_name=f"Translated_{uploaded_file.name}", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                with st.spinner(f"1️⃣ Đang quét các ô cần dịch theo chế độ [{translation_mode}]..."):
+                    file_bytes = uploaded_file.read()
+                    wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
 
+                    texts_to_translate = set()
+                    for sheet in wb.worksheets:
+                        for row in sheet.iter_rows():
+                            for cell in row:
+                                if cell.value and isinstance(cell.value, str):
+                                    val = cell.value.strip()
+                                    if val.startswith("="): # Bỏ qua ô chứa công thức
+                                        continue
+                                    if translation_mode == "Trung ➔ Việt" and has_chinese(val):
+                                        texts_to_translate.add(val)
+                                    elif translation_mode == "Việt ➔ Trung" and (has_vietnamese(val) or not has_chinese(val)):
+                                        if len(val) > 1 and not val.isnumeric():
+                                            texts_to_translate.add(val)
+
+                    unique_texts = list(texts_to_translate)
+
+                if not unique_texts:
+                    st.warning("Không tìm thấy nội dung văn bản phù hợp với chế độ dịch đã chọn!")
+                else:
+                    with st.spinner(f"2️⃣ Đang dịch {len(unique_texts)} văn bản bằng thư viện chuyên dụng [{translation_mode}]..."):
+                        translation_dict = {}
+                        for idx, text in enumerate(unique_texts):
+                            trans_text = translate_text(text, translation_mode)
+                            translation_dict[text] = trans_text
+
+                    with st.spinner("3️⃣ Đang chèn bản dịch & giữ nguyên 100% định dạng..."):
+                        for sheet in wb.worksheets:
+                            for row in sheet.iter_rows():
+                                for cell in row:
+                                    if cell.value and isinstance(cell.value, str):
+                                        orig = cell.value.strip()
+                                        trans = translation_dict.get(orig, "")
+                                        if trans:
+                                            cell.value = f"{orig}\n{trans}"
+                                            curr_align = cell.alignment
+                                            cell.alignment = Alignment(
+                                                horizontal=curr_align.horizontal or "center",
+                                                vertical=curr_align.vertical or "center",
+                                                wrap_text=True
+                                            )
+
+                        output = io.BytesIO()
+                        wb.save(output)
+                        output.seek(0)
+
+                        st.success(f"✅ Đã dịch thành công ({translation_mode})!")
+                        st.download_button(
+                            label="⬇️ Tải File Excel Song Ngữ (.xlsx)",
+                            data=output.getvalue(),
+                            file_name=f"Translated_{uploaded_file.name}",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
+                        )
+
+            # TRƯỜNG HỢP 2: TẢI FILE ẢNH / PDF
             else:
-                with st.spinner("🔍 Đang phân tích không gian bảng và nhận diện ký tự chính xác..."):
-                    image = Image.open(uploaded_file).convert('RGB')
-                    img_w, img_h = image.size
-                    image_np = np.array(image)
-
-                    ocr_langs = ('ch_sim', 'en') if translation_mode == "Trung ➔ Việt" else ('vi', 'en')
-                    reader = get_ocr_reader(ocr_langs)
-                    results = reader.readtext(image_np, detail=1)
-
-                    # Phân chia ranh giới cột dựa theo tỷ lệ X của ảnh (0 đến img_w)
-                    # Cột 1: STT (0% - 15%)
-                    # Cột 2: Bộ phận (15% - 45%)
-                    # Cột 3: Số máy mở (45% - 60%)
-                    # Cột 4: Chính thức (60% - 75%)
-                    # Cột 5: Thời vụ (75% - 88%)
-                    # Cột 6: Ghi chú (88% - 100%)
-                    
-                    detected_rows_map = {}
-                    title_candidates = []
-
-                    for bbox, text, prob in results:
-                        text = text.strip()
-                        if not text:
-                            continue
-                        x_center = sum([pt[0] for pt in bbox]) / 4
-                        y_center = sum([pt[1] for pt in bbox]) / 4
-
-                        # Nhận diện tiêu đề (nằm ở phần trên cùng của ảnh)
-                        if y_center < img_h * 0.22:
-                            title_candidates.append(text)
-                            continue
-
-                        # Bỏ qua dòng tiêu đề cột
-                        if any(kw in text.lower() for kw in ["stt", "部分", "部门", "开几台机", "正式工", "临时工", "备注"]):
-                            continue
-
-                        # Gom nhóm theo hàng dựa vào y_center (dung sai dòng khoảng 25px)
-                        matched_row_y = None
-                        for ry in detected_rows_map.keys():
-                            if abs(y_center - ry) < 25:
-                                matched_row_y = ry
-                                break
+                if not OCR_AVAILABLE:
+                    st.error("❌ Thư viện 'easyocr' chưa được cài đặt để đọc ảnh/PDF. Vui lòng cài đặt thư viện phụ trợ.")
+                else:
+                    with st.spinner(f"1️⃣ Đang thực hiện OCR đọc văn bản từ hình ảnh/PDF và dịch [{translation_mode}]..."):
+                        file_bytes = uploaded_file.read()
                         
-                        if matched_row_y is None:
-                            matched_row_y = y_center
-                            detected_rows_map[matched_row_y] = {1: [], 2: [], 3: [], 4: [], 5: [], 6: []}
-
-                        # Phân loại vào cột dựa vào tọa độ x_center
-                        if x_center < img_w * 0.15:
-                            detected_rows_map[matched_row_y][1].append(text)
-                        elif x_center < img_w * 0.45:
-                            detected_rows_map[matched_row_y][2].append(text)
-                        elif x_center < img_w * 0.60:
-                            detected_rows_map[matched_row_y][3].append(text)
-                        elif x_center < img_w * 0.75:
-                            detected_rows_map[matched_row_y][4].append(text)
-                        elif x_center < img_w * 0.88:
-                            detected_rows_map[matched_row_y][5].append(text)
+                        # Chuyển đổi PDF sang danh sách ảnh nếu là file PDF
+                        images = []
+                        if uploaded_file.type == "application/pdf" or uploaded_file.name.lower().endswith('.pdf'):
+                            if PDF_IMAGE_AVAILABLE:
+                                pdf_doc = fitz.open(stream=file_bytes, filetype="pdf")
+                                for page in pdf_doc:
+                                    pix = page.get_pixmap()
+                                    img = Image.open(io.BytesIO(pix.tobytes("png")))
+                                    images.append(img)
+                            else:
+                                st.error("❌ Thư viện 'PyMuPDF' (fitz) chưa được cài đặt để xử lý PDF.")
+                                st.stop()
                         else:
-                            detected_rows_map[matched_row_y][6].append(text)
+                            images.append(Image.open(io.BytesIO(file_bytes)))
 
-                    # Xây dựng danh sách hàng từ kết quả OCR quét được
-                    extracted_rows = []
-                    sorted_y_keys = sorted(detected_rows_map.keys())
+                        # Dùng EasyOCR đọc toàn bộ text tìm thấy
+                        reader = get_ocr_reader()
+                        extracted_lines = []
+                        for img in images:
+                            img_np = np.array(img)
+                            results = reader.readtext(img_np)
+                            for bbox, text, prob in results:
+                                if prob > 0.2:  # Lọc độ tin cậy cơ bản
+                                    extracted_lines.append(text.strip())
 
-                    for idx, ry in enumerate(sorted_y_keys):
-                        cols = detected_rows_map[ry]
-                        stt_val = " ".join(cols[1]) or str(idx + 1)
-                        dept_val = " ".join(cols[2])
-                        mac_val = " ".join(cols[3])
-                        formal_val = " ".join(cols[4])
-                        temp_val = " ".join(cols[5])
-                        remark_val = " ".join(cols[6])
-
-                        # Chỉ lấy dòng nếu có tên bộ phận hoặc số liệu hợp lệ
-                        if dept_val or mac_val or formal_val:
-                            extracted_rows.append({
-                                "stt": stt_val.strip(),
-                                "dept": dept_val.strip(),
-                                "machines": mac_val.strip(),
-                                "formal": formal_val.strip(),
-                                "temp": temp_val.strip(),
-                                "remark": remark_val.strip()
-                            })
-
-                    # Nếu OCR quét lỗi thiếu dòng, dùng fallback dữ liệu chuẩn từ bảng mẫu gốc
-                    if len(extracted_rows) < 2:
-                        extracted_rows = DEFAULT_TABLE_DATA
-
-                    title_src = " ".join(title_candidates) if title_candidates else "2026年08月26日员工上班"
-                    title_tgt = translate_text(title_src, src_code, tgt_code)
-
-                    # Dịch tên các bộ phận sang tiếng Việt
-                    final_data_rows = []
-                    for r in extracted_rows:
-                        d_src = r["dept"]
-                        d_tgt = translate_text(d_src, src_code, tgt_code)
-                        final_data_rows.append({
-                            "stt": r["stt"],
-                            "dept": d_src,
-                            "dept_tgt": d_tgt,
-                            "machines": r["machines"],
-                            "formal": r["formal"],
-                            "temp": r["temp"],
-                            "remark": r["remark"]
+                        # Xây dựng cấu trúc dữ liệu JSON thô từ OCR đọc được để map vào bảng chấm công chuẩn
+                        rows_data = []
+                        for i, line in enumerate(extracted_lines, start=1):
+                            translated_line = translate_text(line, translation_mode)
+                            if translation_mode == "Trung ➔ Việt":
+                                d_src, d_tgt = line, translated_line
+                            else:
+                                d_src, d_tgt = translated_line, line
+                            
+                            # Thử tách số lượng nếu có format số trong dòng
+                            numbers = re.findall(r'\d+', line)
+                            mach_val = int(numbers[0]) if len(numbers) > 0 else 0
+                            form_val = int(numbers[1]) if len(numbers) > 1 else 0
+                            
+                            rows_data.append({
+                                "stt": i,
+                                "dept_src": d_src,
+                                "dept_tgt": d_tgt,
+                                "machines": mach_val,
+                                "formal": form_val,
+                                "temp": 0,
+                                "remark": ""
                         })
 
-                with st.spinner("📊 Đang định dạng và xuất file Excel chuẩn..."):
-                    excel_data = build_excel_from_data(final_data_rows, title_src, title_tgt, translation_mode)
+                        parsed_data = {
+                            "title_src": "Bảng Chấm Công (OCR)",
+                            "title_tgt": translate_text("Bảng Chấm Công (OCR)", translation_mode),
+                            "date_str": time.strftime("%Y-%m-%d"),
+                            "rows": rows_data if rows_data else [{
+                                "stt": 1, 
+                                "dept_src": "Nội dung trích xuất", 
+                                "dept_tgt": translate_text("Nội dung trích xuất", translation_mode),
+                                "machines": 0, "formal": 0, "temp": 0, "remark": ""
+                            }]
+                        }
 
-                    st.success("✅ Đã xử lý thành công tuyệt đối! Dữ liệu khớp hoàn toàn với ảnh gốc.")
-                    st.download_button(
-                        label="⬇️ Tải File Excel Chuẩn Song Ngữ (.xlsx)",
-                        data=excel_data.getvalue(),
-                        file_name="Bang_cham_cong_chuan.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
+                    with st.spinner("2️⃣ Đang tạo bảng Excel định dạng chuẩn..."):
+                        excel_bytes = build_excel_from_json(parsed_data, translation_mode)
+
+                        st.success(f"✅ Đã trích xuất OCR và chuyển đổi sang Excel ({translation_mode}) thành công!")
+                        st.download_button(
+                            label="⬇️ Tải File Excel (.xlsx)",
+                            data=excel_bytes.getvalue(),
+                            file_name=f"Bang_cham_cong_{parsed_data.get('date_str', 'export')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
+                        )
 
         except Exception as e:
-            st.error(f"❌ Xảy ra lỗi hệ thống: {e}")
+            st.error(f"❌ Xảy ra lỗi trong quá trình xử lý: {e}")
