@@ -6,7 +6,7 @@ import streamlit as st
 from deep_translator import GoogleTranslator
 from openpyxl import load_workbook
 
-# Cố gắng import thư viện OCR cho ảnh (nếu chạy trên Streamlit Cloud cần cài thêm tesseract hoặc easyocr qua packages.txt)
+# Kiểm tra thư viện OCR cho ảnh
 try:
     import easyocr
     from PIL import Image
@@ -45,15 +45,14 @@ def translate_text(text):
     """Hàm dịch văn bản an toàn, giữ lại định dạng cơ bản"""
     if not text or not isinstance(text, str):
         return text
-    # Bỏ qua nếu toàn là số hoặc ký tự đặc biệt
+    # Bỏ qua nếu toàn là số hoặc ký tự đặc biệt ngắn
     if text.strip().isdigit() or len(text.strip()) <= 1:
         return text
 
     try:
-        # Cắt nhỏ văn bản nếu quá dài để tránh quá giới hạn API
         translated = translator.translate(text)
         if translated:
-            # 2) Dòng dịch nằm ngay bên dưới dòng gốc (dùng ký tự xuống dòng \n)
+            # 2) Dòng tiếng Việt nằm ngay bên dưới dòng tiếng Trung (\n)
             # 3) Nội dung dịch nằm chung với ô được dịch
             return f"{text}\n{translated}"
     except Exception as e:
@@ -112,21 +111,17 @@ if uploaded_file is not None:
 
     # XỬ LÝ FILE ẢNH
     elif file_extension in ["png", "jpg", "jpeg"]:
-        st.image(
-            uploaded_file,
-            caption="Ảnh gốc đã tải lên",
-            use_column_width=True,
-        )
+        # Đã cập nhật sửa lỗi tương thích Streamlit mới nhất (bỏ use_column_width)
+        st.image(uploaded_file, caption="Ảnh gốc đã tải lên")
 
         if not HAS_OCR:
             st.warning(
-                "Thư viện OCR chưa được cài đặt đầy đủ trên môi trường này. Vui lòng cấu hình `easyocr` hoặc `pytesseract` trong `packages.txt` nếu chạy trên Streamlit Cloud."
+                "Thư viện OCR chưa được cài đặt. Vui lòng kiểm tra lại file requirements.txt."
             )
         else:
             if st.button("🚀 Nhận diện và dịch văn bản từ ảnh"):
                 with st.spinner("Đang đọc chữ từ ảnh và dịch..."):
                     try:
-                        # Đọc ảnh bằng PIL
                         image = Image.open(uploaded_file)
                         with tempfile.NamedTemporaryFile(
                             delete=False, suffix=".png"
@@ -138,14 +133,10 @@ if uploaded_file is not None:
                         reader = easyocr.Reader(["ch_sim", "vi"])
                         results = reader.readtext(tmp_path)
 
-                        st.write("### Kết quả dịch:")
-                        full_result_text = []
-
+                        st.write("### Kết quả dịch từ ảnh:")
                         for bbox, text, prob in results:
                             translated_line = translator.translate(text)
-                            combined_text = f"Gốc: {text}\nBản dịch: {translated_line}"
-                            st.text(combined_text)
-                            full_result_text.append(combined_text)
+                            st.text(f"Gốc: {text}\nBản dịch: {translated_line}")
 
                         os.unlink(tmp_path)
                     except Exception as e:
