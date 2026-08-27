@@ -1,7 +1,6 @@
 streamlit
-pandas
-openpyxl
 deep-translator
-easyocr
-pillow
-numpy
+openpyxl
+pandas
+Pillow
+pytesseract
