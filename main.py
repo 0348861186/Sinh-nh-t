@@ -29,7 +29,6 @@ st.caption("Hỗ trợ chọn chế độ Trung ➔ Việt hoặc Việt ➔ Tru
 # Cache EasyOCR Reader linh hoạt theo danh sách ngôn ngữ
 @st.cache_resource
 def get_ocr_reader(lang_tuple):
-    # lang_tuple ví dụ: ('ch_sim', 'en') hoặc ('vi', 'en')
     return easyocr.Reader(list(lang_tuple))
 
 # ============================================================
@@ -64,24 +63,21 @@ def has_vietnamese(text):
 # HÀM DỊCH CHUYÊN DỤNG BẰNG DEEP-TRANSLATOR
 # ============================================================
 def translate_texts_batch(text_list, src_lang, tgt_lang):
-    """
-    Dịch danh sách các đoạn văn bản sử dụng GoogleTranslator từ deep-translator.
-    src_lang: 'zh-CN' hoặc 'vi'
-    tgt_lang: 'vi' hoặc 'zh-CN'
-    """
     translator = GoogleTranslator(source=src_lang, target=tgt_lang)
     translation_dict = {}
     
     for text in text_list:
+        if not text.strip():
+            continue
         try:
             translated = translator.translate(text)
             translation_dict[text] = translated
-        except Exception as e:
-            translation_dict[text] = text  # Nếu lỗi thì giữ nguyên gốc
+        except Exception:
+            translation_dict[text] = text  
             
     return translation_dict
 
-# Hàm dựng file Excel từ JSON (khi scan Ảnh/PDF)
+# Hàm dựng file Excel chuẩn format
 def build_excel_from_json(data, mode):
     wb = Workbook()
     ws = wb.active
@@ -100,7 +96,7 @@ def build_excel_from_json(data, mode):
     top_title = t_src if mode == "Trung ➔ Việt" else t_tgt
     bot_title = t_tgt if mode == "Trung ➔ Việt" else t_src
 
-    full_title = f"{dt_str} {top_title}\n{bot_title} ngày {dt_str}".strip()
+    full_title = f"{dt_str} {top_title}\n{bot_title} {dt_str}".strip()
     ws.merge_cells("A1:F1")
     ws["A1"] = full_title
     ws["A1"].font = Font(name=font_name, size=13, bold=True)
@@ -146,7 +142,7 @@ def build_excel_from_json(data, mode):
         for col in range(1, 7):
             c = ws.cell(row=current_row, column=col)
             c.font = Font(name=font_name, size=10)
-            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=Thread if 'Thread' in globals() else Alignment(horizontal="center", vertical="center", wrap_text=True))
             c.border = border
 
         ws.row_dimensions[current_row].height = 32
@@ -201,7 +197,7 @@ if uploaded_file is not None:
                             for cell in row:
                                 if cell.value and isinstance(cell.value, str):
                                     val = cell.value.strip()
-                                    if val.startswith("="):  # Bỏ qua ô chứa công thức
+                                    if val.startswith("="):  
                                         continue
                                     if translation_mode == "Trung ➔ Việt" and has_chinese(val):
                                         texts_to_translate.add(val)
@@ -246,47 +242,143 @@ if uploaded_file is not None:
                             use_container_width=True
                         )
 
-            # TRƯỜNG HỢP 2: TẢI FILE ẢNH / PDF
+            # TRƯỜNG HỢP 2: TẢI FILE ẢNH / PDF (Xử lý thông minh phân tách cấu trúc bảng theo tọa độ)
             else:
-                with st.spinner(f"1️⃣ Đang OCR nhận diện văn bản từ hình ảnh..."):
+                with st.spinner(f"1️⃣ Đang OCR nhận diện văn bản và phân tích cấu trúc bảng từ hình ảnh..."):
                     image = Image.open(uploaded_file).convert('RGB')
                     image_np = np.array(image)
 
-                    # Chọn danh sách ngôn ngữ cho EasyOCR dựa theo chế độ dịch
-                    # Khắc phục lỗi: ch_sim chỉ dùng chung được với en
                     if translation_mode == "Trung ➔ Việt":
                         ocr_langs = ('ch_sim', 'en')
                     else:
                         ocr_langs = ('vi', 'en')
 
                     reader = get_ocr_reader(ocr_langs)
-                    ocr_results = reader.readtext(image_np, detail=0)
+                    # Lấy chi tiết bounding box (tọa độ): [ [ [[x1,y1], [x2,y2], [x3,y3], [x4,y4]], text, confidence ], ... ]
+                    ocr_results = reader.readtext(image_np, detail=1)
 
-                    # Trích xuất các đoạn text tìm được
-                    extracted_texts = [text.strip() for text in ocr_results if text.strip()]
+                    # Lọc và sắp xếp các ô theo tọa độ hàng (y trung bình)
+                    items = []
+                    for bbox, text, prob in ocr_results:
+                        text = text.strip()
+                        if not text:
+                            continue
+                        y_center = sum([pt[1] for pt in bbox]) / 4
+                        x_center = sum([pt[0] for pt in bbox]) / 4
+                        items.append({'text': text, 'y': y_center, 'x': x_center})
 
-                with st.spinner(f"2️⃣ Đang dịch văn bản đã OCR [{translation_mode}]..."):
-                    translation_dict = translate_texts_batch(extracted_texts, src_code, tgt_code)
+                    # Sắp xếp theo chiều dọc (trên xuống dưới)
+                    items.sort(key=lambda item: item['y'])
 
-                    # Dựng dữ liệu hàng từ kết quả OCR
-                    rows_data = []
-                    for idx, text in enumerate(extracted_texts, start=1):
-                        trans_text = translation_dict.get(text, "")
-                        rows_data.append({
-                            "stt": idx,
-                            "dept_src": text,
-                            "dept_tgt": trans_text,
-                            "machines": "",
-                            "formal": "",
-                            "temp": "",
-                            "remark": ""
+                    # Gom nhóm các phần tử thuộc cùng một hàng (ngưỡng chênh lệch y khoảng 15 pixels)
+                    rows_grouped = []
+                    current_row = []
+                    last_y = -1
+
+                    for item in items:
+                        if last_y == -1 or abs(item['y'] - last_y) < 18:
+                            current_row.append(item)
+                            last_y = item['y'] if last_y == -1 else (last_y + item['y']) / 2
+                        else:
+                            # Sắp xếp các cột trong hàng theo chiều ngang (trái sang phải)
+                            current_row.sort(key=lambda col: col['x'])
+                            rows_grouped.append(current_row)
+                            current_row = [item]
+                            last_y = item['y']
+
+                    if current_row:
+                        current_row.sort(key=lambda col: col['x'])
+                        rows_grouped.append(current_row)
+
+                    # Phân tích trích xuất dữ liệu bảng chấm công chuẩn
+                    title_text = ""
+                    table_rows = []
+                    
+                    # Các từ khóa tiêu đề cột cần bỏ qua ở thân bảng
+                    header_keywords = ["stt", "部分", "部门", "开几台机", "正式工", "临时工", "备注", "số máy", "chính thức", "thời vụ", "ghi chú"]
+
+                    for r_idx, r_items in enumerate(rows_grouped):
+                        row_texts = [i['text'] for i in r_items]
+                        full_row_str = " ".join(row_texts)
+
+                        # Dòng đầu tiên thường là tiêu đề bảng
+                        if r_idx == 0 or ("上班" in full_row_str) or ("考勤" in full_row_str):
+                            if not title_text:
+                                title_text = full_row_str
+                            continue
+
+                        # Bỏ qua các dòng tiêu đề cột
+                        is_header = False
+                        for kw in header_keywords:
+                            if kw.lower() in full_row_str.lower():
+                                is_header = True
+                                break
+                        if is_header:
+                            continue
+
+                        # Phân tách các cột dữ liệu theo thứ tự x từ trái sang phải
+                        # Cột 1: STT (thường là số thứ tự ngắn)
+                        # Cột 2: Tên bộ phận
+                        # Cột 3: Số máy mở
+                        # Cột 4: Chính thức
+                        # Cột 5: Thời vụ
+                        # Cột 6: Ghi chú
+                        if len(row_texts) >= 2:
+                            # Đoán STT ở cột đầu tiên nếu là số
+                            stt_val = row_texts[0] if row_texts[0].isdigit() else len(table_rows) + 1
+                            dept_val = row_texts[1] if not row_texts[0].isdigit() else (row_texts[1] if len(row_texts) > 1 else "")
+                            
+                            # Lấy các cột số liệu phía sau nếu có
+                            nums = row_texts[2:] if not row_texts[0].isdigit() else row_texts[2:]
+                            
+                            machines = nums[0] if len(nums) > 0 and nums[0].isdigit() else ""
+                            formal = nums[1] if len(nums) > 1 and nums[1].isdigit() else ""
+                            temp = nums[2] if len(nums) > 2 and nums[2].isdigit() else ""
+                            remark = nums[3] if len(nums) > 3 else ""
+
+                            table_rows.append({
+                                "stt": stt_val,
+                                "dept_src": dept_val,
+                                "machines": machines,
+                                "formal": formal,
+                                "temp": temp,
+                                "remark": remark
+                            })
+
+                # Trích xuất toàn bộ text cần dịch (Tiêu đề + Tên các bộ phận)
+                texts_to_translate = [title_text] if title_text else []
+                for r in table_rows:
+                    if r["dept_src"]:
+                        texts_to_translate.append(r["dept_src"])
+
+                with st.spinner(f"2️⃣ Đang dịch nội dung sang [{translation_mode}]..."):
+                    translation_dict = translate_texts_batch(texts_to_translate, src_code, tgt_code)
+
+                    translated_title = translation_dict.get(title_text, title_text)
+
+                    final_rows = []
+                    for r in table_rows:
+                        d_src = r["dept_src"]
+                        d_tgt = translation_dict.get(d_src, "")
+                        final_rows.append({
+                            "stt": r["stt"],
+                            "dept_src": d_src,
+                            "dept_tgt": d_tgt,
+                            "machines": r["machines"],
+                            "formal": r["formal"],
+                            "temp": r["temp"],
+                            "remark": r["remark"]
                         })
 
+                    # Tách ngày tháng từ tiêu đề nếu có (ví dụ: 2026年08月26日)
+                    date_match = re.search(r'\d{4}[^\d]+\d{1,2}[^\d]+\d{1,2}', title_text)
+                    date_str = date_match.group(0) if date_match else ""
+
                     parsed_data = {
-                        "title_src": "BẢNG CHẤM CÔNG" if translation_mode == "Việt ➔ Trung" else "考勤表",
-                        "title_tgt": translation_dict.get("BẢNG CHẤM CÔNG", "考勤表"),
-                        "date_str": "",
-                        "rows": rows_data
+                        "title_src": title_text,
+                        "title_tgt": translated_title,
+                        "date_str": date_str,
+                        "rows": final_rows
                     }
 
                 with st.spinner("3️⃣ Đang tạo bảng Excel định dạng chuẩn..."):
