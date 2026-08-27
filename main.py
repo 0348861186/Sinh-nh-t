@@ -11,22 +11,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 
 # ============================================================
-# EASYOCR
-# ============================================================
-try:
-    import easyocr
-
-    @st.cache_resource
-    def load_reader():
-        return easyocr.Reader(["ch_sim", "en"])
-
-    reader = load_reader()
-    has_easyocr = True
-except Exception:
-    has_easyocr = False
-
-# ============================================================
-# STREAMLIT CONFIG
+# CẤU HÌNH TRANG STREAMLIT
 # ============================================================
 st.set_page_config(
     page_title="Phần mềm Dịch Song Ngữ Trung - Việt",
@@ -36,21 +21,27 @@ st.set_page_config(
 st.title("🈲 🇻🇳 Phần mềm Dịch Song Ngữ Trung - Việt")
 
 st.markdown("""
-**Excel:** Giữ nguyên workbook gốc, số sheet, số dòng, số cột,
-merge cell, độ rộng cột, chiều cao dòng, font, màu, border,
-alignment và các thuộc tính bố cục có trong file. Chỉ thay nội dung
-các ô được dịch.
-
-**Ảnh:** OCR và tạo Excel theo logic ảnh hiện tại.
+- **Excel:** Giữ nguyên workbook gốc, số sheet, số dòng, số cột, merge cell, độ rộng cột, font, màu, border. Chỉ thay nội dung các ô được dịch.
+- **Ảnh:** OCR và tạo Excel chuẩn mẫu.
 """)
 
 # ============================================================
-# TRANSLATOR
+# KIỂM TRA EASYOCR
 # ============================================================
-translator = GoogleTranslator(
-    source="zh-CN",
-    target="vi"
-)
+try:
+    import easyocr
+    @st.cache_resource
+    def load_reader():
+        return easyocr.Reader(["ch_sim", "en"])
+    reader = load_reader()
+    has_easyocr = True
+except Exception:
+    has_easyocr = False
+
+# ============================================================
+# KHỞI TẠO BỘ DỊCH
+# ============================================================
+translator = GoogleTranslator(source="zh-CN", target="vi")
 
 def translate_text(text):
     if text is None:
@@ -161,25 +152,33 @@ def process_excel(uploaded_file):
     output.seek(0)
     return output, wb, translated_count
 
-# Giao diện Streamlit chọn file
-file_type = st.radio("Chọn định dạng file đầu vào:", ("File Excel (.xlsx)", "File Hình Ảnh (.png, .jpg, .jpeg)"))
-uploaded_file = st.file_uploader("Tải file lên tại đây:", type=["xlsx", "png", "jpg", "jpeg"])
+# ============================================================
+# GIAO DIỆN CHÍNH (UPLOAD FILE)
+# ============================================================
+st.divider()
+file_type = st.radio("📂 Chọn định dạng file đầu vào:", ("File Excel (.xlsx)", "File Hình Ảnh (.png, .jpg, .jpeg)"))
+
+uploaded_file = st.file_uploader(
+    "📥 Tải file lên tại đây (Kéo thả hoặc bấm nút Browse files):", 
+    type=["xlsx", "png", "jpg", "jpeg"]
+)
 
 if uploaded_file is not None:
     if "Excel" in file_type:
-        st.success("Đã tải lên file Excel thành công!")
+        st.success(f"Đã nhận file Excel: **{uploaded_file.name}**")
         try:
             preview_wb = openpyxl.load_workbook(uploaded_file, data_only=False)
             preview_ws = preview_wb.active
-            st.write("Xem trước dữ liệu Excel gốc:")
-            df_preview = pd.DataFrame(preview_ws.values)
-            st.dataframe(df_preview.head(10), use_container_width=True)
+            
+            with st.expander("👁️ Xem trước dữ liệu Excel gốc"):
+                df_preview = pd.DataFrame(preview_ws.values)
+                st.dataframe(df_preview.head(10), use_container_width=True)
 
             if st.button("🚀 Bắt đầu dịch và giữ nguyên 100% cấu trúc Excel"):
                 with st.spinner("Đang dịch toàn bộ workbook..."):
                     uploaded_file.seek(0)
                     output, result_wb, translated_count = process_excel(uploaded_file)
-                    st.success("✅ Dịch hoàn tất!")
+                    st.success("✅ Dịch hoàn tất thành công!")
                     st.info(f"🔤 Số ô đã dịch: **{translated_count}**")
 
                     st.download_button(
