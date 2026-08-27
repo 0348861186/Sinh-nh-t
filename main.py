@@ -12,10 +12,6 @@ import numpy as np
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
-# ============================================================
-# THƯ VIỆN DỊCH LOCAL & OCR
-# ============================================================
-
 import argostranslate.package
 import argostranslate.translate
 
@@ -31,30 +27,28 @@ try:
 except Exception:
     fitz = None
 
-
 # ============================================================
 # CẤU HÌNH STREAMLIT
 # ============================================================
 
 st.set_page_config(
-    page_title="Hệ Thống Dịch Bảng Chấm Công Thông Minh",
+    page_title="Hệ Thống Dịch Bảng Chấm Công Chuyên Sâu",
     page_icon="🌐",
     layout="wide"
 )
 
-st.title("🌐 Dịch & Xuất Bảng Chấm Công Song Ngữ (Tùy Biến Toàn Diện)")
+st.title("🌐 Dịch & Xuất Bảng Chấm Công Song Ngữ (Tối Ưu Dịch Thuật)")
 st.caption(
-    "1 động - cân mọi định dạng file | Local 100% không mất phí | "
-    "Tự động ánh xạ cột & Từ điển chuyên ngành nhà máy"
+    "Bộ từ điển chuyên ngành nhà máy tích hợp | Khắc phục triệt để lỗi dịch sai nghĩa"
 )
 
 
 # ============================================================
-# BỘ TỪ ĐIỂN CHUYÊN NGÀNH NHÀ MÁY (CÓ THỂ BỔ SUNG TÙY Ý)
+# BỘ TỪ ĐIỂN CHUYÊN NGÀNH NHÀ MÁY (BẠN CÓ THỂ BỔ SUNG THÊM Ở ĐÂY)
 # ============================================================
 
 GLOSSARY_ZH_VI = {
-    # Từ khóa hệ thống chung
+    # Thuật ngữ chấm công & nhân sự nhà máy
     "正式工": "Công nhân chính thức",
     "临时工": "Công nhân thời vụ",
     "部门": "Bộ phận",
@@ -67,29 +61,72 @@ GLOSSARY_ZH_VI = {
     "早班": "Ca sáng",
     "晚班": "Ca đêm",
     "休息": "Nghỉ ngơi",
+    "请假": "Xin nghỉ",
+    "旷工": "Nghỉ không phép",
+    "加班": "Tăng ca",
+    "迟到": "Đi muộn",
+    "早退": "Về sớm",
+    " and ": " và ",
     
-    # [TÙY CHỈNH]: Bạn hãy điền thêm tên xưởng/máy móc riêng của công ty vào đây
-    # Ví dụ: "1车间": "Xưởng 1", "裁断组": "Tổ cắt"
+    # Các xưởng / bộ phận thường gặp (Ví dụ mẫu, bạn có thể thay đổi/thêm theo xưởng của bạn)
+    "车间": "Xưởng sản xuất",
+    "1车间": "Xưởng 1",
+    "2车间": "Xưởng 2",
+    "品管部": "Phòng Quản lý chất lượng (QC)",
+    "货仓": "Kho hàng",
+    "包装部": "Bộ phận đóng gói",
+    "裁断部": "Bộ phận cắt",
 }
 
-def apply_glossary(text, mode):
+def smart_translate(text, mode):
     if not text:
-        return text
+        return ""
     text_cleaned = text.strip()
     
+    # 1. Tra cứu chính xác trong từ điển nhà máy
     if mode == "Trung ➔ Việt":
         if text_cleaned in GLOSSARY_ZH_VI:
             return GLOSSARY_ZH_VI[text_cleaned]
+        
+        # Thử tìm kiếm từng phần nếu chuỗi dài chứa từ khóa trong từ điển
+        translated = text_cleaned
+        for zh, vi in sorted(GLOSSARY_ZH_VI.items(), key=lambda x: len(x[0]), reverse=True):
+            if zh in translated:
+                translated = translated.replace(zh, vi)
+        if translated != text_cleaned:
+            return translated
     else:
         vi_zh = {v: k for k, v in GLOSSARY_ZH_VI.items()}
         if text_cleaned in vi_zh:
             return vi_zh[text_cleaned]
             
-    return None
+        translated = text_cleaned
+        for vi, zh in sorted(vi_zh.items(), key=lambda x: len(x[0]), reverse=True):
+            if vi in translated:
+                translated = translated.replace(vi, zh)
+        if translated != text_cleaned:
+            return translated
+
+    # 2. Nếu không có trong từ điển, tiến hành dịch qua Argos Translate
+    try:
+        from_code, to_code = ("zh", "vi") if mode == "Trung ➔ Việt" else ("vi", "zh")
+        direct = find_argos_translation(from_code, to_code)
+        if direct is not None:
+            res = direct.translate(text_cleaned).strip()
+            if res:
+                return res
+        
+        # Fallback qua trung gian tiếng Anh nếu thiếu cặp trực tiếp
+        mid_code = "en"
+        t1 = translate_direct(text_cleaned, from_code, mid_code)
+        t2 = translate_direct(t1, mid_code, to_code)
+        return t2.strip() if t2 else text_cleaned
+    except Exception:
+        return text_cleaned
 
 
 # ============================================================
-# CẤU HÌNH MODEL ARGOS
+# CẤU HÌNH MODEL ARGOS & OCR
 # ============================================================
 
 ARGOS_PACKAGES = {
@@ -98,17 +135,13 @@ ARGOS_PACKAGES = {
     "vi_en": "translate-vi_en-1_9.argosmodel",
     "en_vi": "translate-en_vi-1_9.argosmodel",
 }
-
 ARGOS_BASE_URL = "https://data.argosopentech.com/argospm/v1/"
-
 
 def normalize_text(text):
     if text is None:
         return ""
     text = str(text).replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r'[ \t]+', ' ', text)
-    return text.strip()
-
+    return re.sub(r'[ \t]+', ' ', text).strip()
 
 @st.cache_resource
 def get_argos_languages():
@@ -117,23 +150,16 @@ def get_argos_languages():
     except Exception:
         return []
 
-
 def find_argos_translation(from_code, to_code):
-    installed_languages = get_argos_languages()
-    from_lang = None
-    to_lang = None
-    for lang in installed_languages:
+    for lang in get_argos_languages():
         if lang.code == from_code:
-            from_lang = lang
-        if lang.code == to_code:
-            to_lang = lang
-    if from_lang is None or to_lang is None:
-        return None
-    try:
-        return from_lang.get_translation(to_lang)
-    except Exception:
-        return None
-
+            for target in get_argos_languages():
+                if target.code == to_code:
+                    try:
+                        return lang.get_translation(target)
+                    except Exception:
+                        pass
+    return None
 
 def download_argos_package(package_name):
     cache_dir = Path(".argos_models")
@@ -141,119 +167,76 @@ def download_argos_package(package_name):
     target = cache_dir / package_name
     if target.exists() and target.stat().st_size > 0:
         return target
-    url = ARGOS_BASE_URL + package_name
     try:
-        urllib.request.urlretrieve(url, str(target))
+        urllib.request.urlretrieve(ARGOS_BASE_URL + package_name, str(target))
         return target
     except Exception as e:
         if target.exists():
             try: target.unlink()
             except Exception: pass
-        raise RuntimeError(f"Không thể tải model Argos: {e}")
-
+        raise RuntimeError(f"Không thể tải model: {e}")
 
 def install_argos_package(from_code, to_code):
-    package_key = f"{from_code}_{to_code}"
-    if package_key not in ARGOS_PACKAGES:
-        raise RuntimeError(f"Chưa cấu hình model {from_code} -> {to_code}")
-    package_path = download_argos_package(ARGOS_PACKAGES[package_key])
-    try:
-        argostranslate.package.install_from_path(str(package_path))
-    except Exception as e:
-        if "already installed" not in str(e).lower():
-            raise
-
+    key = f"{from_code}_{to_code}"
+    if key in ARGOS_PACKAGES:
+        path = download_argos_package(ARGOS_PACKAGES[key])
+        try:
+            argostranslate.package.install_from_path(str(path))
+        except Exception:
+            pass
 
 @st.cache_resource
 def initialize_translation_models():
-    required_pairs = [("zh", "en"), ("en", "zh"), ("vi", "en"), ("en", "vi")]
-    for from_code, to_code in required_pairs:
-        if find_argos_translation(from_code, to_code) is None:
-            install_argos_package(from_code, to_code)
+    for f, t in [("zh", "en"), ("en", "zh"), ("vi", "en"), ("en", "vi")]:
+        if find_argos_translation(f, t) is None:
+            install_argos_package(f, t)
             try: get_argos_languages.clear()
             except Exception: pass
 
-
 def translate_direct(text, from_code, to_code):
     text = normalize_text(text)
-    if not text or from_code == to_code: return text
-    translation = find_argos_translation(from_code, to_code)
-    if translation is None:
+    if not text or from_code == to_code:
+        return text
+    tr = find_argos_translation(from_code, to_code)
+    if tr is None:
         install_argos_package(from_code, to_code)
         try: get_argos_languages.clear()
         except Exception: pass
-        translation = find_argos_translation(from_code, to_code)
-    if translation is None: return text
+        tr = find_argos_translation(from_code, to_code)
+    if tr is None:
+        return text
     try:
-        result = translation.translate(text)
-        return result.strip() if result else text
+        res = tr.translate(text)
+        return res.strip() if res else text
     except Exception:
         return text
-
-
-def translate_text(text, mode):
-    text = normalize_text(text)
-    if not text:
-        return ""
-
-    # 1. Tra từ điển chuyên ngành trước
-    glossary_result = apply_glossary(text, mode)
-    if glossary_result is not None:
-        return glossary_result
-
-    # 2. Dịch qua model local kết hợp
-    if mode == "Trung ➔ Việt":
-        direct = find_argos_translation("zh", "vi")
-        if direct is not None:
-            res = direct.translate(text).strip()
-            if res: return res
-        english = translate_direct(text, "zh", "en")
-        vietnamese = translate_direct(english, "en", "vi")
-        return vietnamese.strip() if vietnamese else text
-    else:
-        direct = find_argos_translation("vi", "zh")
-        if direct is not None:
-            res = direct.translate(text).strip()
-            if res: return res
-        english = translate_direct(text, "vi", "en")
-        chinese = translate_direct(english, "en", "zh")
-        return chinese.strip() if chinese else text
-
-
-# ============================================================
-# OCR & TIỀN XỬ LÝ ẢNH
-# ============================================================
 
 def preprocess_image(image):
     if image.mode != "RGB":
         image = image.convert("RGB")
-    width, height = image.size
-    scale = 1 if width >= 1600 else 2
+    w, h = image.size
+    scale = 1 if w >= 1600 else 2
     if scale > 1:
-        image = image.resize((width * scale, height * scale), Image.Resampling.LANCZOS)
+        image = image.resize((w * scale, h * scale), Image.Resampling.LANCZOS)
     image = ImageEnhance.Contrast(image).enhance(1.3)
     image = ImageEnhance.Sharpness(image).enhance(1.3)
     return image
 
-
 @st.cache_resource
 def get_ocr():
     if easyocr is None:
-        raise RuntimeError("Chưa cài đặt thư viện EasyOCR.")
+        raise RuntimeError("Chưa cài đặt EasyOCR.")
     return easyocr.Reader(['ch_sim', 'en'], gpu=False)
-
 
 def ocr_image(image):
     reader = get_ocr()
-    processed = preprocess_image(image)
-    results = reader.readtext(np.array(processed))
+    results = reader.readtext(np.array(preprocess_image(image)))
     items = []
     for (bbox, text, prob) in results:
         text = normalize_text(text)
         if text:
             items.append({"text": text, "score": float(prob), "box": bbox})
     return items
-
 
 def get_box_geometry(box):
     if not box: return None
@@ -263,7 +246,6 @@ def get_box_geometry(box):
         return (min(xs), min(ys), max(xs), max(ys))
     except Exception:
         return None
-
 
 def group_ocr_lines(items):
     prepared = []
@@ -288,10 +270,8 @@ def group_ocr_lines(items):
     for line in lines: line.sort(key=lambda x: x["x1"])
     return lines
 
-
 def line_to_text(line):
     return " ".join(item["text"].strip() for item in line if item["text"].strip())
-
 
 def extract_date(text):
     patterns = [
@@ -309,7 +289,6 @@ def extract_date(text):
             except Exception: pass
     return ""
 
-
 def clean_number(text):
     if text is None: return ""
     text = str(text).strip().replace(",", ".").replace("，", ".")
@@ -321,14 +300,8 @@ def clean_number(text):
     except Exception:
         return text
 
-
-# ============================================================
-# HỆ THỐNG ĐỘNG - TỰ ĐỘNG NHẬN DIỆN CỘT THÔNG MINH
-# ============================================================
-
 def detect_header_line(lines):
-    # Từ khóa mở rộng để tìm dòng tiêu đề cho mọi mẫu bảng chấm công khác nhau
-    keywords = ["部门", "开几台", "正式", "临时", "备注", "bộ phận", "số máy", "chính thức", "thời vụ", "ghi chú", "stt", "tên", "họ tên"]
+    keywords = ["部门", "开几台", "正式", "临时", "备注", "bộ phận", "số máy", "chính thức", "thời vụ", "ghi chú", "stt", "tên"]
     best_idx, best_score = None, 0
     for idx, line in enumerate(lines):
         text = line_to_text(line).lower()
@@ -338,127 +311,94 @@ def detect_header_line(lines):
             best_idx = idx
     return best_idx
 
-
-def classify_column_dynamic(col_name_lower):
-    """Ánh xạ linh hoạt tiêu đề cột dựa trên từ khóa chứa bên trong"""
-    if any(k in col_name_lower for k in ["部门", "bộ phận", "phòng", "xưởng", "tên"]):
-        return "dept_src"
-    if any(k in col_name_lower for k in ["máy", "台", "开机", "số máy"]):
-        return "machines"
-    if any(k in col_name_lower for k in ["正式", "chính thức", "cố định"]):
-        return "formal"
-    if any(k in col_name_lower for k in ["临时", "thời vụ", "phụ"]):
-        return "temp"
-    if any(k in col_name_lower for k in ["备注", "ghi chú", "chú thích"]):
-        return "remark"
+def classify_column_dynamic(name):
+    if any(k in name for k in ["部门", "bộ phận", "phòng", "xưởng", "tên"]): return "dept_src"
+    if any(k in name for k in ["máy", "台", "开机", "số máy"]): return "machines"
+    if any(k in name for k in ["正式", "chính thức"]): return "formal"
+    if any(k in name for k in ["临时", "thời vụ"]): return "temp"
+    if any(k in name for k in ["备注", "ghi chú"]): return "remark"
     return "unknown"
 
-
 def parse_attendance_rows(lines, header_index):
-    if header_index is None:
-        # Nếu không tìm thấy header, tự động dùng dòng đầu tiên làm mốc
-        header_index = 0
-
-    header_line = lines[header_index]
-    columns = [{"name": item["text"].lower(), "x": item["cx"]} for item in header_line]
-    
+    if header_index is None: header_index = 0
+    columns = [{"name": item["text"].lower(), "x": item["cx"]} for item in lines[header_index]]
     rows = []
+    
     for line in lines[header_index + 1:]:
         if not line: continue
         line_text = line_to_text(line)
-        if not line_text: continue
-        if any(kw in line_text.lower() for kw in ["一共", "总计", "合计", "tổng cộng", "total"]):
+        if not line_text or any(kw in line_text.lower() for kw in ["一共", "总计", "合计", "tổng cộng"]):
             continue
 
-        # Tự động bắt STT nếu có số ở đầu dòng
-        stt = ""
-        stt_match = re.match(r'^\s*(\d+)[\.\\)]?\s*$', line[0]["text"])
-        if stt_match:
-            stt = int(stt_match.group(1))
-        else:
-            match = re.match(r'^\s*(\d+)', line_text)
-            if match: stt = int(match.group(1))
-            else: stt = len(rows) + 1  # Tự sinh STT nếu file không có cột STT rõ ràng
+        stt = len(rows) + 1
+        m_stt = re.match(r'^\s*(\d+)[\.\\)]?\s*$', line[0]["text"])
+        if m_stt: stt = int(m_stt.group(1))
 
         row = {"stt": stt, "dept_src": "", "dept_tgt": "", "machines": "", "formal": "", "temp": "", "remark": ""}
-
         for item in line:
-            if not columns:
-                continue
-            nearest_col = min(columns, key=lambda c: abs(c["x"] - item["cx"]))
-            col_type = classify_column_dynamic(nearest_col["name"])
-            text = item["text"].strip()
+            if not columns: continue
+            col = min(columns, key=lambda c: abs(c["x"] - item["cx"]))
+            c_type = classify_column_dynamic(col["name"])
+            txt = item["text"].strip()
             
-            if col_type == "dept_src":
-                row["dept_src"] = (row["dept_src"] + " " + text).strip()
-            elif col_type == "machines":
-                row["machines"] = clean_number(text)
-            elif col_type == "formal":
-                row["formal"] = clean_number(text)
-            elif col_type == "temp":
-                row["temp"] = clean_number(text)
-            elif col_type == "remark":
-                row["remark"] = (row["remark"] + " " + text).strip()
+            if c_type == "dept_src": row["dept_src"] = (row["dept_src"] + " " + txt).strip()
+            elif c_type == "machines": row["machines"] = clean_number(txt)
+            elif c_type == "formal": row["formal"] = clean_number(txt)
+            elif c_type == "temp": row["temp"] = clean_number(txt)
+            elif c_type == "remark": row["remark"] = (row["remark"] + " " + txt).strip()
 
-        # Fallback nếu dòng không khớp cột: lấy chữ dài nhất làm bộ phận
         if not row["dept_src"]:
             for item in line:
                 txt = item["text"].strip()
                 if txt and not re.fullmatch(r'\d+(?:\.\d+)?', txt):
                     row["dept_src"] = txt
                     break
-
         rows.append(row)
     return rows
 
-
 def parse_attendance_image(image, mode):
     items = ocr_image(image)
-    if not items:
-        raise RuntimeError("Không đọc được chữ từ ảnh này.")
+    if not items: raise RuntimeError("Không đọc được chữ từ ảnh.")
     lines = group_ocr_lines(items)
-    header_index = detect_header_line(lines)
-    all_text = "\n".join(line_to_text(line) for line in lines)
+    h_idx = detect_header_line(lines)
+    all_text = "\n".join(line_to_text(l) for l in lines)
     date_str = extract_date(all_text)
 
-    title_lines = [line_to_text(line) for line in lines[:header_index]] if header_index else []
+    title_lines = [line_to_text(l) for l in lines[:h_idx]] if h_idx else []
     title_src = " ".join([t for t in title_lines if t]).strip()
     
-    rows = parse_attendance_rows(lines, header_index)
-    title_tgt = translate_text(title_src, mode) if title_src else ""
+    rows = parse_attendance_rows(lines, h_idx)
+    title_tgt = smart_translate(title_src, mode) if title_src else ""
 
     for row in rows:
         if row.get("dept_src"):
-            row["dept_tgt"] = translate_text(row["dept_src"], mode)
+            row["dept_tgt"] = smart_translate(row["dept_src"], mode)
 
     return {"title_src": title_src, "title_tgt": title_tgt, "date_str": date_str, "rows": rows}
-
 
 def pdf_to_images(pdf_bytes):
     if fitz is None: raise RuntimeError("Chưa cài PyMuPDF.")
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    images = []
+    imgs = []
     try:
         for page in doc:
             pix = page.get_pixmap(matrix=fitz.Matrix(2.5, 2.5), alpha=False)
-            images.append(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
+            imgs.append(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
     finally:
         doc.close()
-    return images
+    return imgs
 
-
-def merge_parsed_documents(documents, mode):
+def merge_parsed_documents(documents):
     if not documents: return {"title_src": "", "title_tgt": "", "date_str": "", "rows": []}
     merged = {"title_src": documents[0].get("title_src", ""), "title_tgt": documents[0].get("title_tgt", ""), "date_str": documents[0].get("date_str", ""), "rows": []}
     next_stt = 1
     for doc in documents:
         for row in doc.get("rows", []):
-            new_row = dict(row)
-            new_row["stt"] = next_stt
-            merged["rows"].append(new_row)
+            r = dict(row)
+            r["stt"] = next_stt
+            merged["rows"].append(r)
             next_stt += 1
     return merged
-
 
 def build_excel_from_json(data, mode):
     wb = Workbook()
@@ -467,8 +407,8 @@ def build_excel_from_json(data, mode):
     font_name = "Microsoft YaHei"
 
     orange_fill = PatternFill(fill_type="solid", fgColor="ED7D00")
-    thin_side = Side(style="thin", color="000000")
-    border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+    thin = Side(style="thin", color="000000")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
     t_src, t_tgt, dt_str, rows = data.get("title_src", ""), data.get("title_tgt", ""), data.get("date_str", ""), data.get("rows", [])
     full_title = f"{dt_str} {t_src}\n{t_tgt}".strip()
@@ -488,82 +428,68 @@ def build_excel_from_json(data, mode):
         ("备注" if mode == "Trung ➔ Việt" else "Ghi chú", "Ghi chú" if mode == "Trung ➔ Việt" else "备注")
     ]
 
-    for col_idx, (top_h, bot_h) in enumerate(headers, start=1):
-        cell = ws.cell(row=2, column=col_idx)
-        cell.value = f"{top_h}\n{bot_h}" if top_h != bot_h else top_h
+    for idx, (th, bh) in enumerate(headers, start=1):
+        cell = ws.cell(row=2, column=idx)
+        cell.value = f"{th}\n{bh}" if th != bh else th
         cell.font = Font(name=font_name, size=10, bold=True)
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.fill = orange_fill
         cell.border = border
     ws.row_dimensions[2].height = 38
 
-    current_row = 3
+    curr = 3
     for row in rows:
-        ws.cell(row=current_row, column=1, value=row.get("stt", ""))
-        ws.cell(row=current_row, column=2, value=f"{row.get('dept_src','')}\n{row.get('dept_tgt','')}".strip())
-        ws.cell(row=current_row, column=3, value=row.get("machines", ""))
-        ws.cell(row=current_row, column=4, value=row.get("formal", ""))
-        ws.cell(row=current_row, column=5, value=row.get("temp", ""))
-        ws.cell(row=current_row, column=6, value=row.get("remark", ""))
+        ws.cell(row=curr, column=1, value=row.get("stt", ""))
+        ws.cell(row=curr, column=2, value=f"{row.get('dept_src','')}\n{row.get('dept_tgt','')}".strip())
+        ws.cell(row=curr, column=3, value=row.get("machines", ""))
+        ws.cell(row=curr, column=4, value=row.get("formal", ""))
+        ws.cell(row=curr, column=5, value=row.get("temp", ""))
+        ws.cell(row=curr, column=6, value=row.get("remark", ""))
 
-        for col_idx in range(1, 7):
-            cell = ws.cell(row=current_row, column=col_idx)
+        for c in range(1, 7):
+            cell = ws.cell(row=curr, column=c)
             cell.font = Font(name=font_name, size=10)
-            cell.alignment = Alignment(horizontal="center" if col_idx in [1, 3, 4, 5] else "left", vertical="center", wrap_text=True)
+            cell.alignment = Alignment(horizontal="center" if c in [1, 3, 4, 5] else "left", vertical="center", wrap_text=True)
             cell.border = border
-        ws.row_dimensions[current_row].height = 32
-        current_row += 1
+        ws.row_dimensions[curr].height = 32
+        curr += 1
 
-    for col_letter, width in {'A': 8, 'B': 30, 'C': 12, 'D': 12, 'E': 12, 'F': 20}.items():
-        ws.column_dimensions[col_letter].width = width
+    for col, w in {'A': 8, 'B': 30, 'C': 12, 'D': 12, 'E': 12, 'F': 20}.items():
+        ws.column_dimensions[col].width = w
 
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
     return output
 
-
 # ============================================================
-# GIAO DIỆN CHÍNH
+# GIAO DIỆN
 # ============================================================
 
 mode = st.sidebar.selectbox("Chọn chiều dịch", ["Trung ➔ Việt", "Việt ➔ Trung"])
-
-uploaded_file = st.file_uploader(
-    "Tải lên tệp bảng chấm công bất kỳ (Ảnh PNG, JPG hoặc PDF)",
-    type=["png", "jpg", "jpeg", "pdf"]
-)
+uploaded_file = st.file_uploader("Tải lên tệp bảng chấm công (Ảnh / PDF)", type=["png", "jpg", "jpeg", "pdf"])
 
 if uploaded_file is not None:
     try:
-        with st.spinner("Đang chuẩn bị mô hình dịch local..."):
+        with st.spinner("Đang khởi tạo hệ thống dịch..."):
             initialize_translation_models()
 
-        images = []
-        if uploaded_file.type == "application/pdf":
-            with st.spinner("Đang xử lý file PDF..."):
-                images = pdf_to_images(uploaded_file.getvalue())
-        else:
-            images = [Image.open(uploaded_file)]
-
-        parsed_docs = []
+        images = pdf_to_images(uploaded_file.getvalue()) if uploaded_file.type == "application/pdf" else [Image.open(uploaded_file)]
+        
+        docs = []
         for img in images:
-            with st.spinner("Đang quét OCR thông minh & dịch linh hoạt..."):
-                parsed_docs.append(parse_attendance_image(img, mode))
+            with st.spinner("Đang xử lý thông minh..."):
+                docs.append(parse_attendance_image(img, mode))
 
-        final_data = merge_parsed_documents(parsed_docs, mode)
-
-        st.success("Xử lý thành công mọi định dạng file!")
-        st.subheader("Xem trước kết quả trích xuất")
+        final_data = merge_parsed_documents(docs)
+        st.success("Xử lý thành công!")
         st.json(final_data)
 
-        excel_data = build_excel_from_json(final_data, mode)
         st.download_button(
-            label="📥 Tải xuống Excel Song Ngữ Chuẩn Xác",
-            data=excel_data,
-            file_name="bang_cham_cong_xu_ly_dong.xlsx",
+            label="📥 Tải xuống Excel Song Ngữ",
+            data=build_excel_from_json(final_data, mode),
+            file_name="bang_cham_cong_chuan.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-
     except Exception as e:
-        st.error(f"Đã xảy ra lỗi khi xử lý tệp: {e}")
+        st.error(f"Lỗi: {e}")
