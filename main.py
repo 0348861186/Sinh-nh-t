@@ -1,6 +1,4 @@
-from pathlib import Path
-
-code = r'''import io
+import io
 import re
 import json
 import time
@@ -225,7 +223,6 @@ def apply_glossary_phrases(text, mode):
     entries.sort(key=lambda x: (x[0], x[1]), reverse=True)
 
     for _, _, src, tgt in entries:
-        # Với tiếng Trung có thể bỏ khoảng trắng trong OCR.
         if re.search(r"[\u3400-\u9fff]", src):
             pattern = re.escape(src)
             result = re.sub(pattern, tgt, result, flags=re.IGNORECASE)
@@ -288,7 +285,6 @@ def looks_like_non_translatable(text):
         return True
 
     if re.fullmatch(r"[A-Za-z0-9_\-/#. ]+", text):
-        # Mã/ký hiệu thường không nên dịch.
         if re.search(r"\d", text):
             return True
 
@@ -384,14 +380,6 @@ def ensure_argos_pair(from_code, to_code):
 
 @st.cache_resource
 def initialize_translation_models():
-    """
-    Chỉ cài 4 model cần cho đường vòng:
-    ZH -> EN -> VI
-    VI -> EN -> ZH
-
-    Không ép cài zh_vi/vi_zh vì không phải môi trường Argos nào
-    cũng có đúng package đó.
-    """
     required_pairs = [
         ("zh", "en"),
         ("en", "zh"),
@@ -500,14 +488,11 @@ def postprocess_translation(source, translated, mode):
     if not translated:
         return normalize_text(source)
 
-    # Khôi phục dấu câu cơ bản bị mất ở đầu/cuối.
     source_s = normalize_text(source)
 
     if source_s.endswith(":") and not translated.endswith(":"):
         translated += ":"
 
-    # Nếu bản dịch vẫn còn quá nhiều ký tự Trung khi Trung -> Việt,
-    # không tự ý thay đổi vì có thể là tên riêng/mã.
     return translated
 
 
@@ -520,34 +505,27 @@ def translate_text(text, mode, context="general", remember=True):
     if looks_like_non_translatable(text):
         return text
 
-    # 1. Translation Memory.
     cached = tm_lookup(text, mode, context)
     if cached:
         return cached
 
-    # 2. Exact glossary.
     exact = apply_glossary_exact(text, mode)
     if exact is not None:
         if remember:
             tm_save(text, exact, mode, context)
         return exact
 
-    # 3. Cụm thuật ngữ.
     glossary_result = apply_glossary_phrases(text, mode)
 
-    # Nếu glossary đã chuyển toàn bộ câu, dùng luôn.
     if glossary_result != text and not re.search(r"[\u3400-\u9fff]", glossary_result):
         result = glossary_result
         if remember:
             tm_save(text, result, mode, context)
         return result
 
-    # 4. Bảo vệ số/mã/ngày.
     protected_text, protected = protect_tokens(glossary_result)
 
-    # 5. Nếu còn tiếng Trung/Vietnamese cần dịch.
     if mode == "Trung ➔ Việt":
-        # Ưu tiên direct ZH -> VI nếu môi trường đã có model.
         direct = find_argos_translation("zh", "vi")
 
         if direct is not None:
@@ -555,7 +533,6 @@ def translate_text(text, mode, context="general", remember=True):
                 protected_text, "zh", "vi"
             )
         else:
-            # Fallback: ZH -> EN -> VI.
             english = argos_translate_once(
                 protected_text, "zh", "en"
             )
@@ -595,8 +572,6 @@ def preprocess_variants(image):
         image = image.convert("RGB")
 
     width, height = image.size
-
-    # Không phóng đại quá mức.
     scale = 2 if width < 1800 else 1
 
     if scale > 1:
@@ -632,9 +607,6 @@ def get_ocr():
             "Chưa cài EasyOCR. Hãy cài easyocr trong requirements.txt."
         )
 
-    # ch_sim = tiếng Trung giản thể
-    # en = tiếng Anh
-    # vi = tiếng Việt
     return easyocr.Reader(
         ["ch_sim", "en", "vi"],
         gpu=False,
@@ -662,7 +634,6 @@ def raw_ocr(image):
             continue
 
         bbox, text, prob = result
-
         text = normalize_text(text)
 
         if not text:
@@ -892,14 +863,12 @@ def detect_header_line(lines):
 
     for idx, line in enumerate(lines):
         text = line_to_text(line).lower()
-
         score = 0
 
         for kw in HEADER_KEYWORDS:
             if kw.lower() in text:
                 score += 1
 
-        # Header thường có nhiều cụm ngắn.
         if len(line) >= 3:
             score += 0.5
 
@@ -952,7 +921,6 @@ def parse_attendance_rows(lines, header_index):
         header_index = 0
 
     header_line = lines[header_index]
-
     columns = []
 
     for item in header_line:
@@ -992,7 +960,6 @@ def parse_attendance_rows(lines, header_index):
             continue
 
         stt = ""
-
         first_text = normalize_text(line[0]["text"])
 
         stt_match = re.match(
@@ -1060,7 +1027,6 @@ def parse_attendance_rows(lines, header_index):
                     row["remark"] + " " + text
                 ).strip()
 
-        # Fallback bộ phận.
         if not row["dept_src"]:
             for item in line:
                 txt = normalize_text(item["text"])
@@ -1145,7 +1111,6 @@ def parse_attendance_image(image, mode, multi_pass=True):
             )
 
         if row.get("remark"):
-            # Có thể bật dịch ghi chú nếu muốn.
             row["remark_tgt"] = translate_text(
                 row["remark"],
                 mode,
@@ -1215,15 +1180,9 @@ def merge_parsed_documents(documents):
         }
 
     merged = {
-        "title_src": documents[0].get(
-            "title_src", ""
-        ),
-        "title_tgt": documents[0].get(
-            "title_tgt", ""
-        ),
-        "date_str": documents[0].get(
-            "date_str", ""
-        ),
+        "title_src": documents[0].get("title_src", ""),
+        "title_tgt": documents[0].get("title_tgt", ""),
+        "date_str": documents[0].get("date_str", ""),
         "rows": []
     }
 
@@ -1233,531 +1192,141 @@ def merge_parsed_documents(documents):
         for row in doc.get("rows", []):
             new_row = dict(row)
             new_row["stt"] = next_stt
-
-            merged["rows"].append(
-                new_row
-            )
-
+            merged["rows"].append(new_row)
             next_stt += 1
+
+        if not merged["date_str"] and doc.get("date_str"):
+            merged["date_str"] = doc.get("date_str")
 
     return merged
 
 
 # ============================================================
-# EXCEL
+# XUẤT EXCEL
 # ============================================================
-def build_excel_from_json(data, mode):
+def export_to_excel(data):
     wb = Workbook()
     ws = wb.active
-    ws.title = "Sheet1"
+    ws.title = "Bảng Chấm Công"
 
-    font_name = "Microsoft YaHei"
-
-    orange_fill = PatternFill(
-        fill_type="solid",
-        fgColor="ED7D00"
+    font_title = Font(name="Arial", size=14, bold=True)
+    font_header = Font(name="Arial", size=11, bold=True, color="FFFFFF")
+    font_data = Font(name="Arial", size=10)
+    
+    fill_header = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
+    align_center = Alignment(horizontal="center", vertical="center")
+    align_left = Alignment(horizontal="left", vertical="center")
+    
+    thin_border = Border(
+        left=Side(style='thin', color='D9D9D9'),
+        right=Side(style='thin', color='D9D9D9'),
+        top=Side(style='thin', color='D9D9D9'),
+        bottom=Side(style='thin', color='D9D9D9')
     )
 
-    thin_side = Side(
-        style="thin",
-        color="000000"
-    )
+    ws.append([data.get("title_tgt") or data.get("title_src", "Bảng Chấm Công")])
+    ws.cell(row=1, column=1).font = font_title
+    ws.append([])
 
-    border = Border(
-        left=thin_side,
-        right=thin_side,
-        top=thin_side,
-        bottom=thin_side
-    )
+    headers = ["STT", "Bộ phận (Gốc)", "Bộ phận (Dịch)", "Số máy", "Chính thức", "Thời vụ", "Ghi chú"]
+    ws.append(headers)
 
-    title_src = data.get("title_src", "")
-    title_tgt = data.get("title_tgt", "")
-    date_str = data.get("date_str", "")
-    rows = data.get("rows", [])
+    for col_idx in range(1, len(headers) + 1):
+        cell = ws.cell(row=3, column=col_idx)
+        cell.font = font_header
+        cell.fill = fill_header
+        cell.alignment = align_center
 
-    title_parts = []
-
-    if date_str:
-        title_parts.append(date_str)
-
-    if title_src:
-        title_parts.append(title_src)
-
-    full_title_src = " ".join(title_parts).strip()
-
-    if title_tgt:
-        full_title = (
-            f"{full_title_src}\n"
-            f"{title_tgt}"
-        ).strip()
-    else:
-        full_title = full_title_src
-
-    ws.merge_cells("A1:F1")
-
-    ws["A1"] = full_title
-
-    ws["A1"].font = Font(
-        name=font_name,
-        size=13,
-        bold=True
-    )
-
-    ws["A1"].alignment = Alignment(
-        horizontal="center",
-        vertical="center",
-        wrap_text=True
-    )
-
-    ws.row_dimensions[1].height = 48
-
-    if mode == "Trung ➔ Việt":
-        headers = [
-            ("STT", "STT"),
-            ("部门", "Bộ phận"),
-            ("开几台机", "Số máy mở"),
-            ("正式工", "Chính thức"),
-            ("临时工", "Thời vụ"),
-            ("备注", "Ghi chú")
-        ]
-    else:
-        headers = [
-            ("STT", "STT"),
-            ("Bộ phận", "部门"),
-            ("Số máy mở", "开几台机"),
-            ("Chính thức", "正式工"),
-            ("Thời vụ", "临时工"),
-            ("Ghi chú", "备注")
-        ]
-
-    for col_idx, (top_h, bottom_h) in enumerate(
-        headers,
-        start=1
-    ):
-        cell = ws.cell(
-            row=2,
-            column=col_idx
-        )
-
-        cell.value = (
-            f"{top_h}\n{bottom_h}"
-            if top_h != bottom_h
-            else top_h
-        )
-
-        cell.font = Font(
-            name=font_name,
-            size=10,
-            bold=True
-        )
-
-        cell.alignment = Alignment(
-            horizontal="center",
-            vertical="center",
-            wrap_text=True
-        )
-
-        cell.fill = orange_fill
-        cell.border = border
-
-    ws.row_dimensions[2].height = 38
-
-    current_row = 3
-
-    for row in rows:
-        ws.cell(
-            row=current_row,
-            column=1,
-            value=row.get("stt", "")
-        )
-
-        dept_src = row.get("dept_src", "")
-        dept_tgt = row.get("dept_tgt", "")
-
-        dept_value = dept_src
-
-        if dept_tgt:
-            dept_value = (
-                f"{dept_src}\n{dept_tgt}"
-            ).strip()
-
-        ws.cell(
-            row=current_row,
-            column=2,
-            value=dept_value
-        )
-
-        ws.cell(
-            row=current_row,
-            column=3,
-            value=row.get("machines", "")
-        )
-
-        ws.cell(
-            row=current_row,
-            column=4,
-            value=row.get("formal", "")
-        )
-
-        ws.cell(
-            row=current_row,
-            column=5,
-            value=row.get("temp", "")
-        )
-
-        # Ghi chú giữ nguyên + bản dịch nếu có.
-        remark_src = row.get("remark", "")
-        remark_tgt = row.get("remark_tgt", "")
-
-        if remark_src and remark_tgt:
-            remark_value = (
-                f"{remark_src}\n{remark_tgt}"
-            )
-        else:
-            remark_value = remark_src or remark_tgt
-
-        ws.cell(
-            row=current_row,
-            column=6,
-            value=remark_value
-        )
-
-        for col_idx in range(1, 7):
-            cell = ws.cell(
-                row=current_row,
-                column=col_idx
-            )
-
-            cell.font = Font(
-                name=font_name,
-                size=10
-            )
-
-            cell.alignment = Alignment(
-                horizontal=(
-                    "center"
-                    if col_idx in [1, 3, 4, 5]
-                    else "left"
-                ),
-                vertical="center",
-                wrap_text=True
-            )
-
-            cell.border = border
-
-        ws.row_dimensions[current_row].height = 38
-
-        current_row += 1
-
-    widths = {
-        "A": 8,
-        "B": 32,
-        "C": 14,
-        "D": 14,
-        "E": 14,
-        "F": 30
-    }
-
-    for col_letter, width in widths.items():
-        ws.column_dimensions[
-            col_letter
-        ].width = width
+    for row_idx, row in enumerate(data.get("rows", []), start=4):
+        ws.append([
+            row.get("stt", ""),
+            row.get("dept_src", ""),
+            row.get("dept_tgt", ""),
+            row.get("machines", ""),
+            row.get("formal", ""),
+            row.get("temp", ""),
+            row.get("remark_tgt") or row.get("remark", "")
+        ])
+        
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=row_idx, column=col_idx)
+            cell.font = font_data
+            cell.border = thin_border
+            if col_idx in [1, 4, 5, 6]:
+                cell.alignment = align_center
+            else:
+                cell.alignment = align_left
 
     output = io.BytesIO()
-
     wb.save(output)
-
     output.seek(0)
-
     return output
 
 
 # ============================================================
-# GIAO DIỆN GLOSSARY / TRANSLATION MEMORY
+# GIAO DIỆN STREAMLIT
 # ============================================================
-def glossary_editor():
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("📚 Từ điển chuyên ngành")
+def main():
+    st.title("🌐 Dịch Bảng Chấm Công Local")
+    st.write("Ứng dụng hỗ trợ dịch bảng chấm công từ tiếng Trung sang tiếng Việt và ngược lại sử dụng EasyOCR và Argos Translate.")
 
-    custom = get_custom_glossary()
+    with st.spinner("Đang khởi tạo các mô hình dịch..."):
+        initialize_translation_models()
 
-    with st.sidebar.expander(
-        "➕ Thêm thuật ngữ",
-        expanded=False
-    ):
-        src = st.text_input(
-            "Từ/cụm nguồn",
-            key="glossary_src"
-        )
+    mode = st.sidebar.selectbox("Chọn chiều dịch", ["Trung ➔ Việt", "Việt ➔ Trung"])
+    
+    uploaded_files = st.file_uploader(
+        "Tải lên ảnh hoặc file PDF bảng chấm công", 
+        type=["png", "jpg", "jpeg", "pdf"], 
+        accept_multiple_files=True
+    )
 
-        tgt = st.text_input(
-            "Bản dịch",
-            key="glossary_tgt"
-        )
+    if uploaded_files:
+        if st.button("Bắt đầu xử lý và dịch"):
+            all_documents = []
+            
+            for uploaded_file in uploaded_files:
+                file_bytes = uploaded_file.read()
+                
+                if uploaded_file.type == "application/pdf":
+                    try:
+                        images = pdf_to_images(file_bytes)
+                        for img in images:
+                            res = parse_attendance_image(img, mode)
+                            all_documents.append(res)
+                    except Exception as e:
+                        st.error(f"Lỗi khi đọc file PDF {uploaded_file.name}: {e}")
+                else:
+                    try:
+                        image = Image.open(io.BytesIO(file_bytes))
+                        res = parse_attendance_image(image, mode)
+                        all_documents.append(res)
+                    except Exception as e:
+                        st.error(f"Lỗi khi đọc ảnh {uploaded_file.name}: {e}")
 
-        if st.button(
-            "Lưu thuật ngữ",
-            key="save_glossary"
-        ):
-            if src.strip() and tgt.strip():
-                custom[src.strip()] = {
-                    "translation": tgt.strip(),
-                    "type": "custom",
-                    "priority": 200
-                }
+            if all_documents:
+                merged_data = merge_parsed_documents(all_documents)
+                st.success("Xử lý thành công!")
+                
+                st.subheader("Kết quả dịch")
+                st.write(f"**Tiêu đề:** {merged_data.get('title_tgt')}")
+                st.write(f"**Ngày:** {merged_data.get('date_str')}")
 
-                save_json_file(
-                    GLOSSARY_FILE,
-                    custom
-                )
+                rows = merged_data.get("rows", [])
+                if rows:
+                    import pandas as pd
+                    df = pd.DataFrame(rows)
+                    st.dataframe(df, use_container_width=True)
 
-                st.success(
-                    "Đã lưu từ điển."
-                )
-
-                st.rerun()
-
-    with st.sidebar.expander(
-        "📖 Từ điển hiện tại",
-        expanded=False
-    ):
-        if custom:
-            for key, value in custom.items():
-                if isinstance(value, dict):
-                    st.write(
-                        f"**{key}** → "
-                        f"{value.get('translation', '')}"
+                    excel_data = export_to_excel(merged_data)
+                    st.download_button(
+                        label="📥 Tải xuống file Excel",
+                        data=excel_data,
+                        file_name="bang_cham_cong_da_dich.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
                 else:
-                    st.write(
-                        f"**{key}** → {value}"
-                    )
-        else:
-            st.caption(
-                "Chưa có thuật ngữ tùy chỉnh."
-            )
+                    st.warning("Không tìm thấy dữ liệu dòng nào trong tài liệu.")
 
-        if custom:
-            if st.button(
-                "🗑 Xóa toàn bộ từ điển tùy chỉnh",
-                key="clear_glossary"
-            ):
-                save_json_file(
-                    GLOSSARY_FILE,
-                    {}
-                )
-
-                st.rerun()
-
-
-def memory_editor():
-    st.sidebar.markdown("---")
-
-    with st.sidebar.expander(
-        "🧠 Translation Memory",
-        expanded=False
-    ):
-        memory = get_translation_memory()
-
-        st.write(
-            f"Số mục đã nhớ: **{len(memory)}**"
-        )
-
-        if memory:
-            if st.button(
-                "🗑 Xóa Translation Memory",
-                key="clear_tm"
-            ):
-                save_json_file(
-                    TM_FILE,
-                    {}
-                )
-
-                st.rerun()
-
-
-# ============================================================
-# GIAO DIỆN CHÍNH
-# ============================================================
-st.title(
-    "🌐 Dịch & Xuất Bảng Chấm Công Song Ngữ"
-)
-
-st.caption(
-    "Local OCR + Glossary + Translation Memory + Argos "
-    "| Không cần API AI"
-)
-
-mode = st.sidebar.selectbox(
-    "Chọn chiều dịch",
-    [
-        "Trung ➔ Việt",
-        "Việt ➔ Trung"
-    ]
-)
-
-multi_pass = st.sidebar.checkbox(
-    "🔎 OCR nhiều lượt để tăng độ chính xác",
-    value=True
-)
-
-show_ocr = st.sidebar.checkbox(
-    "Hiển thị dữ liệu OCR thô",
-    value=False
-)
-
-glossary_editor()
-memory_editor()
-
-uploaded_file = st.file_uploader(
-    "Tải lên bảng chấm công",
-    type=[
-        "png",
-        "jpg",
-        "jpeg",
-        "pdf"
-    ]
-)
-
-
-# ============================================================
-# XỬ LÝ FILE
-# ============================================================
-if uploaded_file is not None:
-    try:
-        with st.spinner(
-            "Đang kiểm tra / chuẩn bị model dịch local..."
-        ):
-            model_errors = (
-                initialize_translation_models()
-            )
-
-        if model_errors:
-            st.warning(
-                "Một số model chưa sẵn sàng:\n\n"
-                + "\n".join(model_errors)
-            )
-
-        images = []
-
-        if uploaded_file.type == "application/pdf":
-            with st.spinner(
-                "Đang chuyển PDF thành ảnh..."
-            ):
-                images = pdf_to_images(
-                    uploaded_file.getvalue()
-                )
-        else:
-            image = Image.open(
-                uploaded_file
-            ).convert("RGB")
-
-            images = [image]
-
-        st.info(
-            f"Đã nhận **{len(images)} trang/ảnh**."
-        )
-
-        parsed_docs = []
-
-        for page_index, img in enumerate(images, start=1):
-            with st.spinner(
-                f"Đang OCR + phân tích trang {page_index}/{len(images)}..."
-            ):
-                parsed = parse_attendance_image(
-                    img,
-                    mode,
-                    multi_pass=multi_pass
-                )
-
-                parsed_docs.append(parsed)
-
-        final_data = merge_parsed_documents(
-            parsed_docs
-        )
-
-        st.success(
-            "Đã xử lý xong."
-        )
-
-        if show_ocr:
-            st.subheader(
-                "🔍 Dữ liệu sau OCR / phân tích"
-            )
-
-            st.json(final_data)
-
-        st.subheader(
-            "📋 Xem trước kết quả"
-        )
-
-        preview_rows = []
-
-        for row in final_data["rows"]:
-            preview_rows.append({
-                "STT": row.get("stt", ""),
-                "Bộ phận nguồn": row.get(
-                    "dept_src", ""
-                ),
-                "Bộ phận dịch": row.get(
-                    "dept_tgt", ""
-                ),
-                "Số máy": row.get(
-                    "machines", ""
-                ),
-                "Chính thức": row.get(
-                    "formal", ""
-                ),
-                "Thời vụ": row.get(
-                    "temp", ""
-                ),
-                "Ghi chú": row.get(
-                    "remark", ""
-                ),
-                "Ghi chú dịch": row.get(
-                    "remark_tgt", ""
-                ),
-            })
-
-        if preview_rows:
-            st.dataframe(
-                preview_rows,
-                use_container_width=True
-            )
-        else:
-            st.warning(
-                "Không phát hiện được dòng dữ liệu."
-            )
-
-        excel_data = build_excel_from_json(
-            final_data,
-            mode
-        )
-
-        st.download_button(
-            label=(
-                "📥 Tải xuống Excel song ngữ"
-            ),
-            data=excel_data,
-            file_name=(
-                "bang_cham_cong_song_ngu.xlsx"
-            ),
-            mime=(
-                "application/vnd.openxmlformats-"
-                "officedocument.spreadsheetml.sheet"
-            )
-        )
-
-    except Exception as e:
-        st.error(
-            f"Đã xảy ra lỗi khi xử lý tệp: {e}"
-        )
-
-        with st.expander(
-            "Chi tiết lỗi"
-        ):
-            st.exception(e)
-'''
-path = "/mnt/data/main_local_translation.py"
-Path(path).write_text(code, encoding="utf-8")
-print(path)
+if __name__ == "__main__":
+    main()
