@@ -362,7 +362,6 @@ def parse_attendance_rows(lines, header_index):
         
         row = {"stt": len(rows) + 1, "dept_src": "", "dept_tgt": "", "machines": "", "formal": "", "temp": "", "remark": ""}
         for item in line:
-            # Gán cột gần nhất theo tọa độ x
             col = min(cols, key=lambda c: abs(c["x"] - item["cx"])) if cols else {"type": "dept_src"}
             ctype = col["type"]
             if ctype in row:
@@ -400,13 +399,13 @@ def create_excel_file(parsed_data, mode):
 
 
 # ============================================================
-# GIAO DIỆN CHÍNH (UI RÕ RÀNG)
+# GIAO DIỆN CHÍNH (UI)
 # ============================================================
 uploaded_file = st.file_uploader("📂 Tải lên hình ảnh bảng chấm công", type=["png", "jpg", "jpeg"])
 
 if uploaded_file is not None:
     image = Image.open(uploaded_file)
-    st.image(image, caption="Ảnh bảng chấm công gốc", use_column_width=True)
+    st.image(image, caption="Ảnh bảng chấm công gốc", use_container_width=True)
 
     mode = st.selectbox("🌐 Chọn chiều dịch:", ["Trung ➔ Việt", "Việt ➔ Trung"])
 
@@ -424,11 +423,9 @@ if uploaded_file is not None:
             else:
                 st.warning("⚠️ Không tìm thấy bảng dữ liệu hợp lệ trong ảnh.")
 
-    # Hiển thị kết quả và nút download ngay khi có dữ liệu trong session
     if "parsed_rows" in st.session_state and st.session_state["parsed_rows"]:
         st.subheader("📊 Kết quả trích xuất:")
         
-        # Chuyển dữ liệu ra bảng hiển thị trực quan lên web
         display_data = []
         for r in st.session_state["parsed_rows"]:
             t_dept = r["dept_tgt"] or translate_text(r["dept_src"], st.session_state["mode"])
@@ -444,11 +441,9 @@ if uploaded_file is not None:
         
         st.dataframe(display_data, use_container_width=True)
 
-        # Tạo file Excel để tải xuống
         excel_data = create_excel_file(st.session_state["parsed_rows"], st.session_state["mode"])
         
         st.markdown("---")
-        # Nút Download Excel hiển thị rõ ràng
         st.download_button(
             label="📥 Tải xuống File Excel Kết Quả",
             data=excel_data,
