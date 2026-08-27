@@ -3,3 +3,4 @@ openpyxl>=3.1.2
 google-generativeai>=0.8.3
 Pillow>=10.2.0
 PyMuPDF>=1.23.22
+google-generativeai
