@@ -1,9 +1,10 @@
 import streamlit as st
 import openpyxl
 from openpyxl.styles import Alignment
+from openpyxl.utils import get_column_letter
 from deep_translator import GoogleTranslator
 import easyocr
-import cv2
+from PIL import Image
 import numpy as np
 import io
 
@@ -14,10 +15,14 @@ st.title("🇨🇳 ĐỒNG BỘ DỊCH SONG NGỮ TRUNG - VIỆT 🇻🇳")
 # Khởi tạo EasyOCR (Sử dụng bộ nhớ cache để không bị load lại mỗi lần nhấn nút)
 @st.cache_resource
 def load_ocr():
-    # 'ch_sim': Tiếng Trung giản thể, 'vi': Tiếng Việt, 'en': Tiếng Anh phụ trợ
+    # ch_sim: Tiếng Trung giản thể, vi: Tiếng Việt, en: Tiếng Anh
     return easyocr.Reader(['ch_sim', 'en', 'vi'])
 
-reader = load_ocr()
+try:
+    reader = load_ocr()
+except Exception as e:
+    st.error(f"Lỗi khởi tạo bộ lọc OCR: {str(e)}")
+    reader = None
 
 # --- GIAO DIỆN ĐIỀU KHIỂN (DASHBOARD) ---
 st.sidebar.header("CÀI ĐẶT CẤU HÌNH")
@@ -34,7 +39,7 @@ translation_mode = st.sidebar.selectbox(
     options=["Trung -> Việt", "Việt -> Trung"]
 )
 
-# Thiết lập mã ngôn ngữ chuẩn cho deep-translator
+# Thiết lập mã ngôn ngữ cho deep-translator
 src_lang = 'zh-CN' if translation_mode == "Trung -> Việt" else 'vi'
 dest_lang = 'vi' if translation_mode == "Trung -> Việt" else 'zh-CN'
 
@@ -51,7 +56,6 @@ def translate_text(text, src, dest):
     """Hàm dịch chuyên dụng độ chính xác cao sử dụng Deep Translator"""
     if not text or str(text).strip() == "":
         return text
-    # Bỏ qua nếu dữ liệu chỉ là số (int, float) nhằm giữ nguyên định dạng dữ liệu số gốc
     if isinstance(text, (int, float)):
         return text
         
@@ -68,35 +72,36 @@ def process_excel(file_bytes, src, dest):
     for sheet in wb.worksheets:
         for row in sheet.iter_rows():
             for cell in row:
-                # Chỉ xử lý các ô chứa văn bản (chuỗi ký tự)
                 if cell.value is not None and isinstance(cell.value, str):
                     original_text = cell.value.strip()
                     if original_text:
-                        # Thực hiện dịch nội dung văn bản
                         translated_text = translate_text(original_text, src, dest)
                         
                         # Yêu cầu 2 & 3: Nội dung dịch nằm chung ô, dòng đích nằm NGAY DƯỚI dòng gốc
                         cell.value = f"{original_text}\n{translated_text}"
                         
-                        # Kích hoạt wrap_text để Excel hiển thị xuống dòng đẹp mắt ngay trong ô đó
+                        # Kích hoạt wrap_text để tự động xuống dòng trong ô
                         cell.alignment = Alignment(wrap_text=True, vertical="top")
                         
-                        # Yêu cầu 1: Mọi thuộc tính font, background, border, độ rộng cột cũ đều được tự động giữ lại
+                        # Yêu cầu 1: Giữ nguyên toàn bộ định dạng màu sắc/font/viền cũ từ openpyxl
     
-    # Xuất file ra bộ nhớ tạm dưới dạng bytes
     out_bio = io.BytesIO()
     wb.save(out_bio)
     out_bio.seek(0)
     return out_bio
 
 def process_image_to_excel(image_bytes, src, dest):
-    """Xử lý Ảnh: Đọc chữ qua OCR, dịch và xuất ra file Excel định dạng cấu trúc song ngữ"""
-    # Giải mã dữ liệu ảnh bằng OpenCV
-    nparr = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    """Xử lý Ảnh: Đọc chữ qua OCR bằng PIL, dịch và xuất ra file Excel định dạng cấu trúc song ngữ"""
+    if reader is None:
+        st.error("Bộ xử lý ảnh OCR chưa được kích hoạt thành công.")
+        return None
+        
+    # Đọc ảnh bằng thư viện PIL (Không phụ thuộc vào driver mã nguồn mở của OpenCV)
+    image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+    img_np = np.array(image)
     
-    # Nhận diện chữ bằng EasyOCR
-    results = reader.readtext(img)
+    # Nhận diện chữ bằng EasyOCR trực tiếp từ mảng numpy của PIL
+    results = reader.readtext(img_np)
     
     # Tạo một file Excel mới để nhận cấu trúc kết quả trực quan
     wb = openpyxl.Workbook()
@@ -131,7 +136,6 @@ if uploaded_file is not None:
     file_bytes = uploaded_file.read()
     st.success("Tải file lên thành công! Sẵn sàng để dịch.")
     
-    # Tạo 2 cột để đặt nút bấm trực quan
     col1, col2 = st.columns(2)
     
     with col1:
@@ -144,23 +148,22 @@ if uploaded_file is not None:
                     else:
                         output_data = process_image_to_excel(file_bytes, src_lang, dest_lang)
                     
-                    # Lưu kết quả dịch vào bộ nhớ trạng thái session
-                    st.session_state['translated_output'] = output_data
-                    st.success("🎉 Đã dịch xong toàn bộ nội dung!")
+                    if output_data is not None:
+                        st.session_state['translated_output'] = output_data
+                        st.success("🎉 Đã dịch xong toàn bộ nội dung!")
                 except Exception as e:
                     st.error(f"Đã xảy ra lỗi trong quá trình xử lý: {str(e)}")
 
     with col2:
         # Yêu cầu 6: Nút download file excel sau dịch
         if 'translated_output' in st.session_state:
-            # Định dạng lại tên file xuất ra dựa trên file gốc
-            original_name = uploaded_file.name.split('.')[0]
+            orig_name = uploaded_file.name.split('.')[0]
             st.download_button(
                 label="📥 TẢI FILE EXCEL SONG NGỮ",
                 data=st.session_state['translated_output'],
-                file_name=f"SongNgu_{original_name}.xlsx",
+                file_name=f"SongNgu_{orig_name}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
 else:
-    st.info("Vui lòng tải file của bạn lên ở thanh menu bên trái để bắt đầu thực
+    st.info("Vui lòng tải file của bạn lên ở thanh menu bên trái để bắt đầu thực hiện.")
