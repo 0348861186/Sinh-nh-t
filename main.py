@@ -204,7 +204,6 @@ def translate_text(text, mode):
     if not text:
         return ""
 
-    # Làm sạch nhẹ ký tự đặc biệt để tra từ điển hiệu quả hơn
     text_cleaned_lookup = re.sub(r'[^\w\s]', '', text).strip()
 
     # 1. Tra từ điển chuyên ngành trước
@@ -238,22 +237,19 @@ def translate_text(text, mode):
 
 
 # ============================================================
-# OCR & TIỀN XỬ LÝ ẢNH (NÂNG CẤP ĐỘ NÉT & ĐỘ TƯƠNG PHẢN)
+# OCR & TIỀN XỬ LÝ ẢNH
 # ============================================================
 
 def preprocess_image(image):
     if image.mode != "RGB":
         image = image.convert("RGB")
     
-    # Chuyển sang ảnh xám (Grayscale) giúp OCR đọc chữ tốt hơn trên nền giấy nhà máy
     image = image.convert("L")
-    
     width, height = image.size
-    scale = 2 if width < 2000 else 1  # Phóng lớn ảnh nếu độ phân giải thấp
+    scale = 2 if width < 2000 else 1  
     if scale > 1:
         image = image.resize((width * scale, height * scale), Image.Resampling.LANCZOS)
         
-    # Tăng cường mạnh độ tương phản và độ sắc nét giúp loại bỏ nhiễu nền
     image = ImageEnhance.Contrast(image).enhance(1.8)
     image = ImageEnhance.Sharpness(image).enhance(2.0)
     
@@ -264,8 +260,8 @@ def preprocess_image(image):
 def get_ocr():
     if easyocr is None:
         raise RuntimeError("Chưa cài đặt thư viện EasyOCR.")
-    # Hỗ trợ cả giản thể, phồn thể và tiếng Anh để nhận diện toàn diện văn bản xưởng
-    return easyocr.Reader(['ch_sim', 'ch_tra', 'en'], gpu=False)
+    # Đã sửa lỗi bằng cách dùng cấu hình chuẩn tương thích của EasyOCR
+    return easyocr.Reader(['ch_sim', 'en'], gpu=False)
 
 
 def ocr_image(image):
