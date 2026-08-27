@@ -70,7 +70,7 @@ def process_image(uploaded_file):
     reader = get_ocr_reader()
     results = reader.readtext(img_np)
 
-    st.image(image, caption="Ảnh gốc", use_column_width=True)
+    st.image(image, caption="Ảnh gốc", use_container_width=True)
     st.subheader("Kết quả dịch nội dung từ ảnh:")
 
     # Hiển thị kết quả dạng song ngữ
