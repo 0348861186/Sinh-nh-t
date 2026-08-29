@@ -8,6 +8,15 @@ import pandas as pd
 import requests
 import streamlit as st
 from google import genai
+# --- ĐOẠN CODE THÊM MỚI VÀO ĐÂY ---
+# Kiểm tra nếu cron-job gọi đến kèm tham số ?cron=1
+if "cron" in st.query_params:
+    st.text("OK")
+    st.stop()  # Dừng ứng dụng tại đây để trả kết quả ngay, không tải giao diện dưới
+# ----------------------------------
+
+# Phía dưới này là toàn bộ phần code ứng dụng hiện tại của bạn...
+# (Ví dụ: Các hàm đọc file, gọi API Google GenAI, hiển thị bảng biểu,...)
 
 # ============================================================
 # CẤU HÌNH & KHỞI TẠO THƯ MỤC
