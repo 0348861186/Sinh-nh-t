@@ -244,7 +244,7 @@ def save_excel_file(df, filename, sheet_name):
 def telegram_send_message(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: 
         return False, "Thiếu Token hoặc Chat ID"
-    url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_BOT_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
         resp = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=30)
         return (True, "OK") if resp.ok else (False, resp.text)
