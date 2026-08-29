@@ -5,7 +5,7 @@ from datetime import datetime
 # Github Actions sẽ tự động bơm 2 biến này vào
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-DB_FILE = "data/current_hr_data.xlsx" # Đường dẫn file Excel trên Github
+DB_FILE = "current_hr_data.xlsx" # Đường dẫn file Excel trên Github
 
 def normalize(text): return str(text).strip().lower().replace("_", " ").replace("-", " ")
 
