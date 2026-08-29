@@ -254,7 +254,7 @@ def telegram_send_message(message):
 def telegram_send_file(file_path, caption):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: 
         return False, "Thiếu Token hoặc Chat ID"
-    url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_BOT_TOKEN}/sendDocument"
+    url = f"(https://api.telegram.org/bot){TELEGRAM_BOT_TOKEN}/sendDocument"
     try:
         with open(file_path, "rb") as f:
             resp = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption}, files={"document": f}, timeout=60)
@@ -265,7 +265,7 @@ def telegram_send_file(file_path, caption):
 def telegram_test():
     if not TELEGRAM_BOT_TOKEN: 
         return False, "Chưa nhập TELEGRAM_BOT_TOKEN"
-    url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_BOT_TOKEN}/getMe"
+    url = f"(https://api.telegram.org/bot){TELEGRAM_BOT_TOKEN}/getMe"
     try:
         resp = requests.get(url, timeout=15)
         if resp.ok and resp.json().get("ok"): 
