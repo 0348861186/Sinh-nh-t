@@ -1,6 +1,4 @@
-from pathlib import Path
-
-app_code = r'''import io
+import io
 import json
 import hashlib
 from datetime import datetime, date
@@ -160,11 +158,8 @@ def normalize_text(value):
 
 def safe_cell(value):
     """Biến dữ liệu mẫu thành dạng JSON/string ổn định."""
-    try:
-        if pd.isna(value):
-            return ""
-    except ValueError:
-        pass
+    if pd.isna(value):
+        return ""
     if isinstance(value, (pd.Timestamp, datetime, date)):
         return value.strftime("%Y-%m-%d")
     if hasattr(value, "item"):
@@ -393,17 +388,20 @@ Trả về JSON đúng schema.
 """
 
     try:
-        response = client.models.generate_content(
+        interaction = client.interactions.create(
             model=GEMINI_MODEL,
-            contents=prompt,
-            config=genai.types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=schema,
-                temperature=0.2,
-            ),
+            input=prompt,
+            response_format={
+                "type": "text",
+                "mime_type": "application/json",
+                "schema": schema,
+            },
+            generation_config={
+                "thinking_level": "medium",
+            },
         )
 
-        text = response.text or ""
+        text = getattr(interaction, "output_text", "") or ""
         text = text.strip()
 
         if not text:
@@ -2000,19 +1998,3 @@ st.caption(
     "5 tầng: Excel Intelligence → Schema Engine → "
     "Validation Engine → Business Engine → Automation Engine"
 )
-'''
-
-requirements = """streamlit>=1.40
-pandas>=2.2
-openpyxl>=3.1
-xlrd>=2.0
-requests>=2.31
-google-genai>=1.40
-"""
-
-readme = """# HR AI 5-Layer Streamlit
-
-## 1. Cài thư viện
-
-```bash
-pip install -r requirements.txt
