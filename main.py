@@ -2001,18 +2001,3 @@ st.caption(
     "Validation Engine → Business Engine → Automation Engine"
 )
 '''
-
-requirements = """streamlit>=1.40
-pandas>=2.2
-openpyxl>=3.1
-xlrd>=2.0
-requests>=2.31
-google-genai>=1.40
-"""
-
-readme = """# HR AI 5-Layer Streamlit
-
-## 1. Cài thư viện
-
-```bash
-pip install -r requirements.txt
