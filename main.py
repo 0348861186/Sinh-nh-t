@@ -1,4 +1,3 @@
-import os
 import io
 import json
 import calendar
@@ -8,26 +7,23 @@ from pathlib import Path
 import pandas as pd
 import requests
 import streamlit as st
-
-from dotenv import load_dotenv
 from google import genai
 
 # ============================================================
 # CẤU HÌNH & KHỞI TẠO THƯ MỤC
 # ============================================================
 
-load_dotenv()
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+# SỬ DỤNG ST.SECRETS ĐỂ BẢO MẬT TOKEN
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "").strip()
+TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = str(st.secrets.get("TELEGRAM_CHAT_ID", "")).strip()
 
 # Thư mục chứa báo cáo xuất ra
 REPORT_DIR = Path("reports")
 REPORT_DIR.mkdir(exist_ok=True)
 LAST_SENT_FILE = REPORT_DIR / "last_sent.txt"
 
-# Thư mục chứa dữ liệu cấu hình/database Excel (Điểm nâng cấp)
+# Thư mục chứa dữ liệu cấu hình/database Excel
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 CURRENT_DB_FILE = DATA_DIR / "current_hr_data.xlsx"
@@ -226,8 +222,10 @@ def dataframe_to_excel(df, sheet_name):
             max_length = 0
             column_letter = column_cells[0].column_letter
             for cell in column_cells:
-                try: max_length = max(max_length, len(str(cell.value)))
-                except Exception: pass
+                try: 
+                    max_length = max(max_length, len(str(cell.value)))
+                except Exception: 
+                    pass
             worksheet.column_dimensions[column_letter].width = min(max(max_length + 2, 12), 40)
     output.seek(0)
     return output
@@ -244,30 +242,37 @@ def save_excel_file(df, filename, sheet_name):
 # ============================================================
 
 def telegram_send_message(message):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return False, "Thiếu Token hoặc Chat ID"
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: 
+        return False, "Thiếu Token hoặc Chat ID"
     url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
         resp = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=30)
         return (True, "OK") if resp.ok else (False, resp.text)
-    except Exception as e: return False, str(e)
+    except Exception as e: 
+        return False, str(e)
 
 def telegram_send_file(file_path, caption):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return False, "Thiếu Token hoặc Chat ID"
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: 
+        return False, "Thiếu Token hoặc Chat ID"
     url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_BOT_TOKEN}/sendDocument"
     try:
         with open(file_path, "rb") as f:
             resp = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption}, files={"document": f}, timeout=60)
         return (True, "OK") if resp.ok else (False, resp.text)
-    except Exception as e: return False, str(e)
+    except Exception as e: 
+        return False, str(e)
 
 def telegram_test():
-    if not TELEGRAM_BOT_TOKEN: return False, "Chưa nhập TELEGRAM_BOT_TOKEN"
+    if not TELEGRAM_BOT_TOKEN: 
+        return False, "Chưa nhập TELEGRAM_BOT_TOKEN"
     url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_BOT_TOKEN}/getMe"
     try:
         resp = requests.get(url, timeout=15)
-        if resp.ok and resp.json().get("ok"): return True, resp.json()["result"].get("username", "")
+        if resp.ok and resp.json().get("ok"): 
+            return True, resp.json()["result"].get("username", "")
         return False, resp.text
-    except Exception as e: return False, str(e)
+    except Exception as e: 
+        return False, str(e)
 
 def send_monthly_report(birthday_df, contract_df, month, year):
     birthday_file = save_excel_file(birthday_df, "danh_sach_sinh_nhat.xlsx", "Sinh nhật")
@@ -297,9 +302,12 @@ def send_monthly_report(birthday_df, contract_df, month, year):
 # ============================================================
 
 def get_last_sent():
-    if not LAST_SENT_FILE.exists(): return ""
-    try: return LAST_SENT_FILE.read_text(encoding="utf-8").strip()
-    except: return ""
+    if not LAST_SENT_FILE.exists(): 
+        return ""
+    try: 
+        return LAST_SENT_FILE.read_text(encoding="utf-8").strip()
+    except: 
+        return ""
 
 def set_last_sent(month, year):
     LAST_SENT_FILE.write_text(f"{year:04d}-{month:02d}", encoding="utf-8")
@@ -313,9 +321,11 @@ def already_sent(month, year):
 
 def automatic_monthly_check(birthday_df, contract_df):
     now = datetime.now()
-    if now.day != 1 or now.hour < 10: return
+    if now.day != 1 or now.hour < 10: 
+        return
     month, year = now.month, now.year
-    if already_sent(month, year): return
+    if already_sent(month, year): 
+        return
 
     success, message = send_monthly_report(birthday_df, contract_df, month, year)
     if success:
@@ -340,15 +350,19 @@ with st.sidebar:
     
     st.divider()
     st.subheader("🤖 Gemini AI")
-    if GEMINI_API_KEY: st.success("🟢 Gemini API đã cấu hình")
-    else: st.warning("🔴 Chưa có Gemini API Key")
+    if GEMINI_API_KEY: 
+        st.success("🟢 Gemini API đã cấu hình")
+    else: 
+        st.warning("🔴 Chưa có Gemini API Key")
     
     st.subheader("📱 Telegram")
-    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID: st.success("🟢 Telegram đã cấu hình")
-    else: st.warning("🔴 Chưa cấu hình Telegram")
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        st.success("🟢 Telegram đã cấu hình")
+    else: 
+        st.warning("🔴 Chưa cấu hình Telegram")
 
 # ============================================================
-# 1. QUẢN LÝ FILE DỮ LIỆU (Đã nâng cấp)
+# 1. QUẢN LÝ FILE DỮ LIỆU
 # ============================================================
 st.header("1️⃣ File danh sách nhân sự")
 
@@ -400,8 +414,10 @@ else:
 
 # Kiểm tra mapping
 mapping_names = {
-    "ma_nv": "Mã nhân viên", "ho_ten": "Họ và tên", 
-    "ngay_sinh": "Ngày sinh", "bo_phan": "Bộ phận", 
+    "ma_nv": "Mã nhân viên", 
+    "ho_ten": "Họ và tên", 
+    "ngay_sinh": "Ngày sinh", 
+    "bo_phan": "Bộ phận", 
     "ngay_het_han_hop_dong": "Ngày hết hạn hợp đồng"
 }
 
@@ -429,7 +445,8 @@ with col3: st.metric("👥 Tổng nhân sự", f"{len(prepared_df):,}")
 
 # Bảng Sinh nhật
 st.subheader(f"🎂 Danh sách sinh nhật tháng {selected_month:02d}")
-if birthday_df.empty: st.info("Không có nhân viên sinh nhật.")
+if birthday_df.empty:
+    st.info("Không có nhân viên sinh nhật.")
 else:
     bday_disp = birthday_df.copy()
     bday_disp["Ngày tháng năm sinh"] = bday_disp["Ngày tháng năm sinh"].dt.strftime("%d/%m/%Y")
@@ -439,7 +456,8 @@ st.download_button("⬇️ Download danh sách sinh nhật", data=dataframe_to_e
 
 # Bảng Hợp đồng
 st.subheader(f"📄 Danh sách hợp đồng hết hạn tháng {selected_month:02d}/{selected_year}")
-if contract_df.empty: st.info("Không có hợp đồng hết hạn.")
+if contract_df.empty:
+    st.info("Không có hợp đồng hết hạn.")
 else:
     cntr_disp = contract_df.copy()
     cntr_disp["Ngày tháng năm sinh"] = cntr_disp["Ngày tháng năm sinh"].dt.strftime("%d/%m/%Y")
@@ -459,17 +477,22 @@ with t_col1:
     st.write("### 📱 Trạng thái Bot")
     if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
         ok, bot_name = telegram_test()
-        if ok: st.success(f"🟢 Bot đang hoạt động: @{bot_name}")
-        else: st.error(f"🔴 Bot lỗi: {bot_name}")
-    else: st.warning("Chưa cấu hình Telegram.")
+        if ok: 
+            st.success(f"🟢 Bot đang hoạt động: @{bot_name}")
+        else: 
+            st.error(f"🔴 Bot lỗi: {bot_name}")
+    else: 
+        st.warning("Chưa cấu hình Telegram.")
 
 with t_col2:
     st.write("### 📤 Gửi báo cáo thủ công")
     if st.button("📤 Gửi báo cáo ngay", type="primary", use_container_width=True):
         with st.spinner("Đang gửi báo cáo lên Telegram..."):
             success, message = send_monthly_report(birthday_df, contract_df, selected_month, selected_year)
-            if success: st.success("✅ Đã gửi thành công 2 file Excel lên Telegram.")
-            else: st.error(f"❌ Gửi thất bại: {message}")
+            if success: 
+                st.success("✅ Đã gửi thành công 2 file Excel lên Telegram.")
+            else: 
+                st.error(f"❌ Gửi thất bại: {message}")
 
 st.divider()
 st.header("5️⃣ Tự động gửi báo cáo hàng tháng")
@@ -478,8 +501,10 @@ st.info("🤖 Hệ thống sẽ tự động gửi báo cáo khi web được tr
 now = datetime.now()
 st.write(f"🕐 Thời gian máy chủ hiện tại: **{now.strftime('%d/%m/%Y %H:%M:%S')}**")
 last_sent = get_last_sent()
-if last_sent: st.write(f"📌 Báo cáo gần nhất đã tự động gửi: **{last_sent}**")
-else: st.write("📌 Chưa có báo cáo tự động nào được gửi.")
+if last_sent: 
+    st.write(f"📌 Báo cáo gần nhất đã tự động gửi: **{last_sent}**")
+else: 
+    st.write("📌 Chưa có báo cáo tự động nào được gửi.")
 
 # Lệnh kích hoạt luồng tự động kiểm tra giờ
 automatic_monthly_check(birthday_df, contract_df)
