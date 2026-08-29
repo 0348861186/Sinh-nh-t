@@ -75,7 +75,7 @@ st.markdown(
 )
 
 # ============================================================
-# HÀM GEMINI
+# HÀM GEMINI (NÂNG CẤP LÊN GEMINI 2.5)
 # ============================================================
 
 def get_gemini_client():
@@ -115,9 +115,9 @@ Chỉ trả về JSON hợp lệ theo mẫu:
 Nếu không tìm thấy trường nào thì giá trị là null. Không giải thích thêm.
 """
     try:
-        # Dùng model ổn định gemini-1.5-flash
+        # Nâng cấp lên model gemini-2.5-flash theo chuẩn SDK mới
         response = client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-2.5-flash",
             contents=prompt,
         )
         text = response.text.strip()
@@ -244,7 +244,7 @@ def save_excel_file(df, filename, sheet_name):
 def telegram_send_message(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: 
         return False, "Thiếu Token hoặc Chat ID"
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
         resp = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=30)
         return (True, "OK") if resp.ok else (False, resp.text)
@@ -254,7 +254,7 @@ def telegram_send_message(message):
 def telegram_send_file(file_path, caption):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: 
         return False, "Thiếu Token hoặc Chat ID"
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
+    url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_BOT_TOKEN}/sendDocument"
     try:
         with open(file_path, "rb") as f:
             resp = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption}, files={"document": f}, timeout=60)
@@ -265,7 +265,7 @@ def telegram_send_file(file_path, caption):
 def telegram_test():
     if not TELEGRAM_BOT_TOKEN: 
         return False, "Chưa nhập TELEGRAM_BOT_TOKEN"
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe"
+    url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_BOT_TOKEN}/getMe"
     try:
         resp = requests.get(url, timeout=15)
         if resp.ok and resp.json().get("ok"): 
