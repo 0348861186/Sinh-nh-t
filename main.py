@@ -30,7 +30,7 @@ from google import genai
 #   Telegram, cron, chống gửi trùng, log trạng thái.
 #
 # Gemini:
-#   Interactions API + gemini-3.1-pro-preview.
+#   Google GenAI Models API + gemini-2.5-flash.
 #   API key đặt trong Streamlit Secrets:
 #       GEMINI_API_KEY = "..."
 #       TELEGRAM_BOT_TOKEN = "..."
@@ -61,9 +61,8 @@ GEMINI_API_KEY = str(st.secrets.get("GEMINI_API_KEY", "")).strip()
 TELEGRAM_BOT_TOKEN = str(st.secrets.get("TELEGRAM_BOT_TOKEN", "")).strip()
 TELEGRAM_CHAT_ID = str(st.secrets.get("TELEGRAM_CHAT_ID", "")).strip()
 
-# Gemini 3.1 Pro Preview hiện là model phù hợp cho luồng AI
-# phân tích cấu trúc + structured output.
-GEMINI_MODEL = "gemini-3.1-pro-preview"
+# Gemini 2.5 Flash: nhanh, tiết kiệm và hỗ trợ structured output.
+GEMINI_MODEL = "gemini-2.5-flash"
 
 DATA_DIR = Path("data")
 REPORT_DIR = Path("reports")
@@ -290,15 +289,14 @@ def get_gemini_client():
 
 def ai_analyze_workbook(sheet_profiles):
     """
-    AI không chỉ nhìn tên cột.
-    Nó nhìn:
-      - sheet
+    Gemini 2.5 Flash phân tích:
+      - tên sheet
       - tên cột
       - kiểu dữ liệu
       - dữ liệu mẫu
-    và trả về schema có confidence + lý do.
-    """
 
+    Trả về schema JSON có confidence + lý do.
+    """
     client, error = get_gemini_client()
     if client is None:
         return None, error
@@ -388,24 +386,26 @@ Trả về JSON đúng schema.
 """
 
     try:
-        interaction = client.interactions.create(
+        # Gemini 2.5 Flash dùng Models API / generate_content.
+        # Structured output được khai báo trong GenerateContentConfig.
+        response = client.models.generate_content(
             model=GEMINI_MODEL,
-            input=prompt,
-            response_format={
-                "type": "text",
-                "mime_type": "application/json",
-                "schema": schema,
-            },
-            generation_config={
-                "thinking_level": "medium",
+            contents=prompt,
+            config={
+                "response_mime_type": "application/json",
+                "response_schema": schema,
+                # Giữ mức suy luận vừa phải để cân bằng tốc độ/độ chính xác.
+                "thinking_config": {
+                    "thinking_budget": 1024,
+                },
             },
         )
 
-        text = getattr(interaction, "output_text", "") or ""
+        text = getattr(response, "text", "") or ""
         text = text.strip()
 
         if not text:
-            return None, "Gemini không trả về output_text."
+            return None, "Gemini không trả về text output."
 
         result = json.loads(text)
         return result, None
