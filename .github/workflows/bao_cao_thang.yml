@@ -1,0 +1,28 @@
+name: Gui Bao Cao Telegram Hang Thang
+
+on:
+  schedule:
+    # 03:00 giờ UTC tương đương 10:00 sáng giờ Việt Nam. Chạy ngày 1 hàng tháng.
+    - cron: '0 3 1 * *'
+  workflow_dispatch: # Cho phép bạn có một nút bấm "Chạy thử ngay lập tức" trên giao diện Github
+
+jobs:
+  run-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Lấy code về
+        uses: actions/checkout@v3
+
+      - name: Cài đặt Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Cài đặt thư viện
+        run: pip install pandas openpyxl requests
+
+      - name: Chạy Code Gửi Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python send_report.py
