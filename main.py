@@ -78,7 +78,7 @@ st.markdown(
 # HÀM GEMINI 2.5 PRO
 # ============================================================
 
-GEMINI_MODEL = "gemini-2.5-pro"
+GEMINI_MODEL = "gemini-2.5-flash"
 
 
 def get_gemini_client():
