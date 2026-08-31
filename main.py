@@ -54,13 +54,14 @@ def get_gemini_client():
         return None
     try:
         return genai.Client(api_key=GEMINI_API_KEY)
-    except Exception:
+    except Exception as e:
+        print(f"Lỗi khởi tạo Gemini Client: {e}")
         return None
 
 def detect_columns_with_gemini(df):
     """
-    Dùng Gemini để đọc tiêu đề và 8 dòng dữ liệu mẫu (Giống Code A).
-    Trả về JSON mapping chuẩn xác 100%.
+    Dùng Gemini để đọc tiêu đề và 8 dòng dữ liệu mẫu.
+    Trả về JSON mapping chuẩn xác 100%. Ưu tiên chạy trước tiên.
     """
     client = get_gemini_client()
     if client is None:
@@ -89,7 +90,7 @@ def detect_columns_with_gemini(df):
     Tuyệt đối chỉ chọn tên cột CÓ THẬT trong dữ liệu. Nếu không chắc chắn, trả về null.
     """
 
-    # Ép AI phải trả về format JSON cố định
+    # Schema chuẩn cho cấu hình JSON output
     schema = {
         "type": "object",
         "properties": {
@@ -98,7 +99,8 @@ def detect_columns_with_gemini(df):
             "ngay_sinh": {"type": ["string", "null"]},
             "bo_phan": {"type": ["string", "null"]},
             "ngay_het_han_hop_dong": {"type": ["string", "null"]},
-        }
+        },
+        "required": ["ma_nv", "ho_ten", "ngay_sinh", "bo_phan", "ngay_het_han_hop_dong"]
     }
 
     try:
@@ -111,6 +113,10 @@ def detect_columns_with_gemini(df):
                 response_schema=schema
             )
         )
+        
+        if not response or not response.text:
+            return None
+            
         result = json.loads(response.text.strip())
         
         # Bảo vệ: Đảm bảo cột AI chọn thực sự tồn tại trong file Excel
@@ -119,8 +125,13 @@ def detect_columns_with_gemini(df):
             if result[key] not in valid_columns:
                 result[key] = None
                 
+        # Kiểm tra xem AI có trả về ít nhất một trường hợp lệ không
+        if not any(result.values()):
+            return None
+            
         return result
-    except Exception:
+    except Exception as e:
+        print(f"Lỗi khi gọi Gemini API: {e}")
         return None
 
 # ============================================================
@@ -305,7 +316,7 @@ if mapping_info.get("hash") != file_hash:
         mapped = detect_columns_with_gemini(df_original)
         method_used = "Gemini AI"
         
-        # Nếu AI lỗi (Hết hạn, mất mạng) -> Fallback
+        # Nếu AI lỗi (Hết hạn, mất mạng, không trả về giá trị) -> Fallback
         if not mapped or not any(mapped.values()):
             mapped = detect_columns_fallback(df_original.columns)
             method_used = "Thuật toán dự phòng (Fallback)"
