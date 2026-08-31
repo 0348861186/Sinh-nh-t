@@ -29,10 +29,10 @@ DATA_DIR.mkdir(exist_ok=True)
 CURRENT_DB_FILE = DATA_DIR / "current_hr_data.xlsx"
 MAPPING_CACHE_FILE = DATA_DIR / "mapping_cache.json"
 
-GEMINI_MODEL = "gemini-2.5-flash"
+# Sử dụng phiên bản mô hình mới theo yêu cầu
+GEMINI_MODEL = "gemini-3.1-pro-preview"
 
 # Khi Gemini đang ở trạng thái quota/error, chỉ thử lại sau khoảng thời gian này.
-# Mục đích: không gọi Gemini liên tục trong các lần Streamlit rerun.
 AI_RETRY_MINUTES = 30
 
 REQUIRED_KEYS = [
@@ -42,7 +42,6 @@ REQUIRED_KEYS = [
     "bo_phan",
     "ngay_het_han_hop_dong",
 ]
-
 
 # ============================================================
 # STREAMLIT CONFIG & CSS
@@ -71,7 +70,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-
 # ============================================================
 # TẦNG AI (PRIMARY) - LUÔN ƯU TIÊN GEMINI
 # ============================================================
@@ -90,23 +88,12 @@ def get_gemini_client():
 def detect_columns_with_gemini(df):
     """
     Gọi Gemini để đọc tiêu đề + 8 dòng dữ liệu mẫu.
-
-    Trả về:
-        (mapping, status, error_text)
-
-    status có thể là:
-        AI_OK       = AI phân tích thành công
-        NO_API      = không có API key / không tạo được client
-        QUOTA       = hết quota / rate limit
-        AI_ERROR    = lỗi AI/API khác
     """
-
     client = get_gemini_client()
 
     if client is None:
         return None, "NO_API", "Không có GEMINI_API_KEY hoặc không tạo được Gemini client."
 
-    # Trích xuất tối đa 8 dòng dữ liệu mẫu để AI phân tích.
     sample_data = []
     sample_df = df.head(8).fillna("")
 
@@ -168,7 +155,6 @@ QUY TẮC BẮT BUỘC:
         if not isinstance(result, dict):
             return None, "AI_ERROR", "Kết quả Gemini không phải JSON object."
 
-        # Bảo vệ: AI chỉ được phép chọn cột thực sự tồn tại trong Excel.
         valid_columns = set(df.columns)
         clean_result = {}
 
@@ -176,7 +162,6 @@ QUY TẮC BẮT BUỘC:
             value = result.get(key)
             clean_result[key] = value if value in valid_columns else None
 
-        # AI chỉ được coi là thành công khi map đủ 5 trường.
         if not all(clean_result.get(key) for key in REQUIRED_KEYS):
             return (
                 clean_result,
@@ -190,7 +175,6 @@ QUY TẮC BẮT BUỘC:
         error_text = str(e)
         lower_error = error_text.lower()
 
-        # Nhận diện các dạng lỗi thường gặp khi hết quota / rate limit.
         quota_markers = [
             "quota",
             "resource_exhausted",
@@ -225,12 +209,10 @@ def find_column_by_keywords(columns, keywords):
     normalized = {col: normalize_text(col) for col in columns}
     normalized_keywords = [normalize_text(k) for k in keywords]
 
-    # Ưu tiên khớp chính xác.
     for col, norm in normalized.items():
         if norm in normalized_keywords:
             return col
 
-    # Sau đó mới khớp chứa từ khóa.
     for col, norm in normalized.items():
         for keyword in normalized_keywords:
             if keyword in norm:
@@ -317,13 +299,6 @@ def parse_datetime(value):
 
 
 def should_retry_ai(mapping_info, file_hash):
-    """
-    Quyết định có cần thử Gemini lại hay không.
-
-    - File khác hash -> thử AI ngay.
-    - Cache AI_OK + cùng hash -> không gọi AI.
-    - Cache FALLBACK/QUOTA/AI_ERROR + cùng hash -> chỉ thử lại khi đến thời gian retry.
-    """
     if mapping_info.get("hash") != file_hash:
         return True
 
@@ -338,18 +313,6 @@ def should_retry_ai(mapping_info, file_hash):
 
 
 def process_mapping(df_original, file_hash, mapping_info):
-    """
-    Luồng chính:
-
-    1. AI luôn là PRIMARY.
-    2. Nếu AI thành công -> cache AI mapping.
-    3. Nếu AI hết quota/lỗi -> Fallback.
-    4. Fallback không được coi là thành công của AI.
-    5. Khi đến thời gian retry, AI được thử lại tự động.
-    6. Khi quota có lại và AI thành công -> quay về AI PRIMARY.
-    """
-
-    # Nếu mapping AI đã thành công cho đúng file -> dùng cache, không gọi API.
     if (
         mapping_info.get("hash") == file_hash
         and mapping_info.get("method") == "Gemini AI"
@@ -357,7 +320,6 @@ def process_mapping(df_original, file_hash, mapping_info):
     ):
         return mapping_info, "CACHE_AI"
 
-    # Nếu đang ở trạng thái fallback nhưng chưa đến thời gian retry -> dùng fallback tạm thời.
     if not should_retry_ai(mapping_info, file_hash):
         return mapping_info, "CACHE_FALLBACK"
 
@@ -365,9 +327,6 @@ def process_mapping(df_original, file_hash, mapping_info):
         mapped, ai_status, ai_error = detect_columns_with_gemini(df_original)
 
     if ai_status == "AI_OK":
-        # ====================================================
-        # AI THÀNH CÔNG -> LƯU CACHE AI
-        # ====================================================
         mapping_info = {
             "hash": file_hash,
             "mapping": mapped,
@@ -380,13 +339,7 @@ def process_mapping(df_original, file_hash, mapping_info):
         save_mapping_cache(mapping_info)
         return mapping_info, "AI_SUCCESS"
 
-    # ========================================================
-    # AI KHÔNG KHẢ DỤNG -> FALLBACK
-    # ========================================================
     fallback_mapping = detect_columns_fallback(df_original.columns)
-
-    # Fallback được lưu để app chạy tiếp, nhưng đánh dấu rõ ràng
-    # rằng đây KHÔNG phải mapping AI thành công.
     next_retry = datetime.now() + timedelta(minutes=AI_RETRY_MINUTES)
 
     mapping_info = {
@@ -667,7 +620,6 @@ if uploaded_file:
     with open(CURRENT_DB_FILE, "wb") as f:
         f.write(uploaded_file.getbuffer())
 
-    # File mới phải bỏ cache mapping cũ để AI được ưu tiên lại từ đầu.
     if MAPPING_CACHE_FILE.exists():
         MAPPING_CACHE_FILE.unlink()
 
@@ -703,7 +655,6 @@ mapping_info, process_status = process_mapping(
     mapping_info,
 )
 
-# Hiển thị trạng thái dễ hiểu.
 method = mapping_info.get("method", "Không rõ")
 ai_status = mapping_info.get("ai_status", "")
 next_retry = parse_datetime(mapping_info.get("next_ai_retry"))
@@ -723,8 +674,9 @@ elif process_status.startswith("FALLBACK"):
             "Khi cấu hình API key và chạy lại ứng dụng, AI sẽ được ưu tiên."
         )
     else:
+        err_detail = mapping_info.get("last_ai_error", "")
         st.warning(
-            f"⚠️ Gemini không khả dụng ({ai_status}). Đang dùng Fallback tạm thời."
+            f"⚠️ Gemini không khả dụng ({ai_status}: {err_detail}). Đang dùng Fallback tạm thời."
         )
 
 elif process_status == "CACHE_FALLBACK":
@@ -739,7 +691,6 @@ elif process_status == "CACHE_FALLBACK":
         )
 
 
-# Chuẩn hóa DataFrame.
 mapping = mapping_info.get("mapping", {})
 prepared_df, missing = prepare_dataframe(df_original, mapping)
 
@@ -768,7 +719,7 @@ c1, c2, c3 = st.columns(3)
 
 c1.metric("🎂 Sinh nhật", f"{len(birthday_df)} người")
 c2.metric("📄 Hợp đồng hết hạn", f"{len(contract_df)} người")
-c3.metric("👥 Tổng nhân sự", f"{len(prepared_df):,} người")
+c3.metric("👥 Tổng nhân sự", f"{len(prepared_df)::,} người")
 
 st.divider()
 
@@ -876,5 +827,4 @@ with st.expander("ℹ️ Thông tin trạng thái ngầm"):
     )
 
 
-# Kích hoạt Check tự động hàng tháng (Yêu cầu Web được mở vào ngày mùng 1)
 automatic_monthly_check(birthday_df, contract_df)
